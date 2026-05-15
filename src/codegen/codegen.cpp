@@ -2,9 +2,12 @@
 #include "../ast/ast_utils.h"
 #include "../ast/token_utils.h"
 #include <iostream>
+#include <cstring>
 
 namespace razen {
 namespace codegen {
+
+// ── Phase 6: Global dispatch ────────────────────────────────────────────────
 
 void Codegen::generate(const std::vector<ASTNode*>& ast_nodes) {
     ir.emitPreamble(source_name);
@@ -17,12 +20,20 @@ void Codegen::generate(const std::vector<ASTNode*>& ast_nodes) {
 
 void Codegen::genNode(ASTNode* node) {
     if (!node) return;
+    // skip comments and annotations in codegen
+    if (node->node_type == ASTNodeType::Comment ||
+        node->node_type == ASTNodeType::Annotation ||
+        node->node_type == ASTNodeType::GenericParams)
+        return;
+
     switch (node->node_type) {
         case ASTNodeType::FunctionDeclaration:
             genFuncDecl(node);
             break;
         case ASTNodeType::ExtDeclaration:
-            ir.emitLine("; extern function: " + (node->token ? node->token->value : "<anon>"));
+            ir.emitLine("declare " + (node->left ? typeToLLVM(node->left->left) : "i32") +
+                        " @" + (node->token ? node->token->value : "extern") + "(" +
+                        (node->middle && node->middle->children ? "..." : "i32") + ")");
             break;
         case ASTNodeType::VarDeclaration:
         case ASTNodeType::ConstDeclaration:
@@ -34,50 +45,35 @@ void Codegen::genNode(ASTNode* node) {
         case ASTNodeType::ReturnStatement:
             genReturn(node);
             break;
-        case ASTNodeType::BinaryExpression:
-            genBinary(node);
-            break;
-        case ASTNodeType::UnaryExpression:
-            genUnary(node);
-            break;
-        case ASTNodeType::Identifier:
-            genIdentifier(node);
-            break;
-        case ASTNodeType::FunctionCall:
-            genCall(node);
-            break;
-        case ASTNodeType::MemberAccess:
-            genMemberAccess(node);
-            break;
-        case ASTNodeType::IntegerLiteral:
-        case ASTNodeType::FloatLiteral:
-        case ASTNodeType::BoolLiteral:
-        case ASTNodeType::CharLiteral:
-        case ASTNodeType::StringLiteral:
-            genLiteral(node);
-            break;
         case ASTNodeType::IfStatement:
         case ASTNodeType::ElseIfStatement:
-            ir.emitLine("; if statement");
-            if (node->left) genNode(node->left);
-            if (node->middle) genNode(node->middle);
-            if (node->right) genNode(node->right);
+            genIf(node);
             break;
         case ASTNodeType::LoopStatement:
-            ir.emitLine("; loop statement");
+            genLoop(node);
+            break;
+        case ASTNodeType::Assignment:
+            genAssign(node);
+            break;
+        case ASTNodeType::MatchStatement:
+            genMatch(node);
+            break;
+        case ASTNodeType::BreakStatement:
+            ir.emitLine("br label %" + ir.label(".loop.end"));
+            break;
+        case ASTNodeType::SkipStatement:
+            ir.emitLine("br label %" + ir.label(".loop.continue"));
+            break;
+        case ASTNodeType::DeferStatement:
+            if (node->left) genNode(node->left);
+            break;
+        case ASTNodeType::TryBlock:
+        case ASTNodeType::TryExpression:
             if (node->left) genNode(node->left);
             if (node->right) genNode(node->right);
             break;
-        case ASTNodeType::Assignment:
-            ir.emitLine("; assignment");
+        case ASTNodeType::CatchExpression:
             if (node->left) genNode(node->left);
-            if (node->right) genExpr(node->right);
-            break;
-        case ASTNodeType::BreakStatement:
-            ir.emitLine("; break");
-            break;
-        case ASTNodeType::SkipStatement:
-            ir.emitLine("; skip");
             break;
         case ASTNodeType::IfBody:
         case ASTNodeType::ElseBody:
@@ -88,82 +84,39 @@ void Codegen::genNode(ASTNode* node) {
             else if (node->children)
                 for (auto* child : *node->children) genNode(child);
             break;
-        case ASTNodeType::MatchStatement:
-            ir.emitLine("; match statement");
-            if (node->children)
-                for (auto* child : *node->children) genNode(child);
-            break;
         case ASTNodeType::MatchCase:
-            ir.emitLine("; match case");
             if (node->right) genNode(node->right);
-            break;
-        case ASTNodeType::DeferStatement:
-            ir.emitLine("; defer");
-            if (node->left) genNode(node->left);
-            break;
-        case ASTNodeType::TryBlock:
-        case ASTNodeType::TryExpression:
-            ir.emitLine("; try");
-            if (node->left) genNode(node->left);
-            if (node->right) genNode(node->right);
-            break;
-        case ASTNodeType::CatchExpression:
-            ir.emitLine("; catch");
-            if (node->left) genNode(node->left);
             break;
         case ASTNodeType::ArrayLiteral:
         case ASTNodeType::TupleLiteral:
-            ir.emitLine("; array/tuple literal");
-            if (node->children)
-                for (auto* elem : *node->children) genNode(elem);
-            break;
         case ASTNodeType::RangeExpression:
-            ir.emitLine("; range expression");
-            break;
-        case ASTNodeType::StructDeclaration:
-            ir.emitLine("; struct: " + (node->token ? node->token->value : "<anon>"));
-            break;
-        case ASTNodeType::EnumDeclaration:
-            ir.emitLine("; enum: " + (node->token ? node->token->value : "<anon>"));
-            break;
-        case ASTNodeType::UnionDeclaration:
-            ir.emitLine("; union: " + (node->token ? node->token->value : "<anon>"));
-            break;
-        case ASTNodeType::ErrorDeclaration:
-            ir.emitLine("; error set: " + (node->token ? node->token->value : "<anon>"));
-            break;
-        case ASTNodeType::ModuleDeclaration:
-            ir.emitLine("; module: " + (node->token ? node->token->value : "<anon>"));
-            break;
-        case ASTNodeType::UseDeclaration:
-            ir.emitLine("; use: " + (node->token ? node->token->value : "<anon>"));
-            break;
-        case ASTNodeType::TypeAliasDeclaration:
-            ir.emitLine("; type alias: " + (node->token ? node->token->value : "<anon>"));
-            break;
-        case ASTNodeType::BehaveDeclaration:
-            ir.emitLine("; behave: " + (node->token ? node->token->value : "<anon>"));
-            break;
         case ASTNodeType::BuiltinExpression:
-            ir.emitLine("; builtin expression");
-            break;
+        case ASTNodeType::StructDeclaration:
+        case ASTNodeType::EnumDeclaration:
+        case ASTNodeType::UnionDeclaration:
+        case ASTNodeType::ErrorDeclaration:
+        case ASTNodeType::TypeAliasDeclaration:
+        case ASTNodeType::ModuleDeclaration:
+        case ASTNodeType::UseDeclaration:
+        case ASTNodeType::BehaveDeclaration:
+            break; // emitted as comments/stubs in later phases
         default:
             break;
     }
 }
 
+// ── Phase 8: Function codegen ───────────────────────────────────────────────
+
 void Codegen::genFuncDecl(ASTNode* node) {
     if (!node || !node->token) return;
     auto& name = node->token->value;
 
-    ir.emitLine("; function: " + name);
-
     std::string ret_type = "void";
     if (node->left && node->left->node_type == ASTNodeType::ReturnType && node->left->left)
         ret_type = typeToLLVM(node->left->left);
+    current_ret_type = ret_type;
 
     std::string sig = "define " + ret_type + " @" + name + "(";
-
     if (node->middle && node->middle->children) {
         for (size_t i = 0; i < node->middle->children->size(); i++) {
             if (i > 0) sig += ", ";
@@ -176,52 +129,184 @@ void Codegen::genFuncDecl(ASTNode* node) {
         }
     }
     sig += ") {";
-
     ir.emitLine(sig);
     ir.indent_str = "    ";
 
+    // store parameters to allocas
+    if (node->middle && node->middle->children) {
+        for (auto* param : *node->middle->children) {
+            if (param->node_type == ASTNodeType::Parameter && param->token) {
+                auto& pname = param->token->value;
+                std::string ptype = param->left ? typeToLLVM(param->left) : "i32";
+                locals[pname] = "%" + pname + ".addr";
+                local_types[pname] = ptype;
+                ir.emitLine("%" + pname + ".addr = alloca " + ptype);
+                ir.emitLine("store " + ptype + " %" + pname + ", " + ptype + "* %" + pname + ".addr");
+            }
+        }
+    }
+
+    has_return_emitted = false;
     if (node->right && node->right->node_type == ASTNodeType::Block)
         genBlock(node->right);
+
+    // ensure a terminator exists
+    if (!has_return_emitted && ret_type != "void") {
+        auto t = ir.tmp("%retval");
+        ir.emitLine(t + " = alloca " + ret_type);
+        ir.emitLine("ret " + ret_type + " 0");
+    } else if (!has_return_emitted) {
+        ir.emitLine("ret void");
+    }
 
     ir.indent_str = "";
     ir.emitLine("}");
     ir.emitLine("");
+
+    locals.clear();
+    local_types.clear();
+    current_ret_type = "void";
 }
+
+// ── Phase 7: Variable declarations ──────────────────────────────────────────
 
 void Codegen::genVarDecl(ASTNode* node) {
     if (!node || !node->token) return;
     auto& name = node->token->value;
-    std::string type_str = node->left ? typeToLLVM(node->left) : "i32";
-    ir.emitLine("; var: " + name + " : " + type_str);
+    std::string llvm_type = node->left ? typeToLLVM(node->left) : "i32";
+
+    // register local variable
+    std::string reg = "%" + name + ".addr";
+    locals[name] = reg;
+    local_types[name] = llvm_type;
+
+    ir.emitLine(reg + " = alloca " + llvm_type);
+
     if (node->right) {
         auto val = genExpr(node->right);
-        ir.emitLine(";   = " + val);
+        // extract type prefix from val (e.g. "i32 42" → type is "i32")
+        std::string val_type = llvm_type;
+        auto space = val.find(' ');
+        if (space != std::string::npos) val_type = val.substr(0, space);
+        ir.emitLine("store " + val + ", " + val_type + "* " + reg);
     }
 }
 
+// ── Block ───────────────────────────────────────────────────────────────────
+
 void Codegen::genBlock(ASTNode* node) {
     if (!node) return;
-    ir.emitLine("; block {");
     if (node->children) {
         for (auto* child : *node->children) {
             genNode(child);
         }
     }
-    ir.emitLine("; }");
 }
+
+// ── Return ──────────────────────────────────────────────────────────────────
 
 void Codegen::genReturn(ASTNode* node) {
     if (!node) return;
+    has_return_emitted = true;
     if (node->left) {
         auto val = genExpr(node->left);
+        auto space = val.find(' ');
+        std::string ty = space != std::string::npos ? val.substr(0, space) : "i32";
         ir.emitLine("ret " + val);
     } else {
         ir.emitLine("ret void");
     }
 }
 
+// ── If/else ─────────────────────────────────────────────────────────────────
+
+void Codegen::genIf(ASTNode* node) {
+    if (!node) return;
+    auto cond_reg = node->left ? genExpr(node->left) : "i1 0";
+    auto label_then = ir.label(".if.then");
+    auto label_else = ir.label(".if.else");
+    auto label_end = ir.label(".if.end");
+
+    ir.emitLine("br " + cond_reg + ", label %" + label_then + ", label %" + label_else);
+    ir.emitLine("");
+    ir.emitLine(label_then + ":");
+    if (node->middle) genNode(node->middle); // if body
+    if (!has_return_emitted) ir.emitLine("br label %" + label_end);
+    ir.emitLine("");
+
+    ir.emitLine(label_else + ":");
+    if (node->right) {
+        if (node->right->node_type == ASTNodeType::ElseIfStatement)
+            genIf(node->right); // else if chain
+        else
+            genNode(node->right); // else body
+    }
+    if (!has_return_emitted) ir.emitLine("br label %" + label_end);
+    ir.emitLine("");
+
+    ir.emitLine(label_end + ":");
+}
+
+// ── Loop ────────────────────────────────────────────────────────────────────
+
+void Codegen::genLoop(ASTNode* node) {
+    auto label_cond = ir.label(".loop.cond");
+    auto label_body = ir.label(".loop.body");
+    auto label_end = ir.label(".loop.end");
+    auto label_cont = ir.label(".loop.continue");
+
+    ir.emitLine("br label %" + label_cond);
+    ir.emitLine("");
+    ir.emitLine(label_cond + ":");
+    if (node->left) {
+        auto cond = genExpr(node->left);
+        ir.emitLine("br " + cond + ", label %" + label_body + ", label %" + label_end);
+    } else {
+        ir.emitLine("br label %" + label_body);
+    }
+    ir.emitLine("");
+    ir.emitLine(label_body + ":");
+    if (node->right) genNode(node->right);
+    ir.emitLine("br label %" + label_cont);
+    ir.emitLine("");
+    ir.emitLine(label_cont + ":");
+    ir.emitLine("br label %" + label_cond);
+    ir.emitLine("");
+    ir.emitLine(label_end + ":");
+}
+
+// ── Assignment ───────────────────────────────────────────────────────────────
+
+void Codegen::genAssign(ASTNode* node) {
+    if (!node || !node->left || !node->token) return;
+    auto* lhs = node->left;
+    if (lhs->node_type == ASTNodeType::Identifier && lhs->token) {
+        auto& name = lhs->token->value;
+        auto it = locals.find(name);
+        if (it != locals.end()) {
+            auto val = node->right ? genExpr(node->right) : "i32 0";
+            std::string val_type = local_types[name];
+            ir.emitLine("store " + val + ", " + val_type + "* " + it->second);
+        }
+    }
+}
+
+// ── Match ───────────────────────────────────────────────────────────────────
+
+void Codegen::genMatch(ASTNode* node) {
+    if (!node) return;
+    ir.emitLine("; match");
+    if (node->children) {
+        for (auto* case_node : *node->children) {
+            if (case_node->right) genNode(case_node->right);
+        }
+    }
+}
+
+// ── Expression dispatch ─────────────────────────────────────────────────────
+
 std::string Codegen::genExpr(ASTNode* node) {
-    if (!node) return "void undef";
+    if (!node) return "i32 0";
     switch (node->node_type) {
         case ASTNodeType::IntegerLiteral:
         case ASTNodeType::FloatLiteral:
@@ -244,6 +329,8 @@ std::string Codegen::genExpr(ASTNode* node) {
     }
 }
 
+// ── Phase 9: Literal codegen ────────────────────────────────────────────────
+
 std::string Codegen::genLiteral(ASTNode* node) {
     if (!node || !node->token) return "i32 0";
     auto& val = node->token->value;
@@ -253,63 +340,283 @@ std::string Codegen::genLiteral(ASTNode* node) {
         case ASTNodeType::FloatLiteral:
             return "double " + val;
         case ASTNodeType::BoolLiteral:
-            return std::string("i1 ") + (val == "true" ? "1" : "0");
+            return "i1 " + std::string(val == "true" ? "1" : "0");
         case ASTNodeType::CharLiteral:
-            return std::string("i8 ") + std::to_string(val.empty() ? 0 : (unsigned char)val[0]);
+            return "i8 " + std::to_string(val.empty() ? 0 : (unsigned char)val[0]);
         case ASTNodeType::StringLiteral: {
             auto gv = ir.strName();
+            // escape special chars for LLVM IR string constant
+            std::string escaped;
+            for (char c : val) {
+                if (c == '\\') escaped += "\\5C";
+                else if (c == '"') escaped += "\\22";
+                else if (c == '\n') escaped += "\\0A";
+                else if (c == '\t') escaped += "\\09";
+                else if (c == '\r') escaped += "\\0D";
+                else if (c >= 32 && c < 127) escaped += c;
+                else { char buf[8]; std::snprintf(buf, 8, "\\%02X", (unsigned char)c); escaped += buf; }
+            }
             ir.emitLine(gv + " = private unnamed_addr constant [" +
-                        std::to_string(val.size() + 1) + " x i8] c\"" + val + "\\00\"");
-            return "i8* getelementptr inbounds ([" + std::to_string(val.size() + 1) +
-                   " x i8], [" + std::to_string(val.size() + 1) + " x i8]* " + gv +
-                   ", i32 0, i32 0)";
+                        std::to_string(val.size() + 1) + " x i8] c\"" + escaped + "\\00\"");
+            auto t = ir.tmp("%gep");
+            ir.emitLine(t + " = getelementptr inbounds ([" + std::to_string(val.size() + 1) +
+                        " x i8], [" + std::to_string(val.size() + 1) + " x i8]* " + gv +
+                        ", i32 0, i32 0)");
+            return "i8* " + t;
         }
         default:
             return "i32 0";
     }
 }
 
+// ── Phase 10: Identifier ────────────────────────────────────────────────────
+
 std::string Codegen::genIdentifier(ASTNode* node) {
-    if (!node || !node->token) return "i32 undef";
+    if (!node || !node->token) return "i32 0";
     auto& name = node->token->value;
-    return "i32 %" + name;
+    auto it = locals.find(name);
+    if (it != locals.end()) {
+        std::string ty = local_types[name];
+        auto t = ir.tmp("%load");
+        ir.emitLine(t + " = load " + ty + ", " + ty + "* " + it->second);
+        return ty + " " + t;
+    }
+    // use named value directly (parameter or global)
+    std::string ty = "i32";
+    return ty + " %" + name;
 }
+
+// ── Phase 10: Binary operations ─────────────────────────────────────────────
 
 std::string Codegen::genBinary(ASTNode* node) {
     if (!node) return "i32 0";
     auto lhs = node->left ? genExpr(node->left) : "i32 0";
     auto rhs = node->right ? genExpr(node->right) : "i32 0";
-    std::string op = node->token ? node->token->value : "?";
-    auto t = ir.tmp();
-    ir.emitLine("; binary: " + lhs + " " + op + " " + rhs);
-    ir.emitLine(t + " = add i32 0, 0  ; placeholder for " + op);
-    return t;
+    auto tok = node->token;
+    if (!tok) return lhs;
+
+    // extract type and register from operands
+    auto parseVal = [](const std::string& s, std::string& ty, std::string& reg) {
+        auto sp = s.find(' ');
+        if (sp != std::string::npos) {
+            ty = s.substr(0, sp);
+            reg = s.substr(sp + 1);
+        } else {
+            ty = "i32";
+            reg = s;
+        }
+    };
+
+    std::string lt, lr, rt, rr;
+    parseVal(lhs, lt, lr);
+    parseVal(rhs, rt, rr);
+    std::string res_type = lt; // result type follows left operand
+    auto t = ir.tmp("%bin");
+
+    switch (tok->type) {
+        // Arithmetic
+        case TokenType::Plus:
+            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
+                ir.emitLine(t + " = fadd " + res_type + " " + lr + ", " + rr);
+            else
+                ir.emitLine(t + " = add " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+        case TokenType::Minus:
+            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
+                ir.emitLine(t + " = fsub " + res_type + " " + lr + ", " + rr);
+            else
+                ir.emitLine(t + " = sub " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+        case TokenType::Star:
+            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
+                ir.emitLine(t + " = fmul " + res_type + " " + lr + ", " + rr);
+            else
+                ir.emitLine(t + " = mul " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+        case TokenType::Slash:
+            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
+                ir.emitLine(t + " = fdiv " + res_type + " " + lr + ", " + rr);
+            else
+                ir.emitLine(t + " = sdiv " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+        case TokenType::Percent:
+            ir.emitLine(t + " = srem " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+
+        // Comparison (icmp produces i1, need zext to i32)
+        case TokenType::EqualsEquals: {
+            auto ic = ir.tmp("%ic");
+            ir.emitLine(ic + " = icmp eq " + res_type + " " + lr + ", " + rr);
+            auto z = ir.tmp("%zext");
+            ir.emitLine(z + " = zext i1 " + ic + " to i32");
+            return "i32 " + z;
+        }
+        case TokenType::NotEquals: {
+            auto ic = ir.tmp("%ic");
+            ir.emitLine(ic + " = icmp ne " + res_type + " " + lr + ", " + rr);
+            auto z = ir.tmp("%zext");
+            ir.emitLine(z + " = zext i1 " + ic + " to i32");
+            return "i32 " + z;
+        }
+        case TokenType::LessThan: {
+            auto ic = ir.tmp("%ic");
+            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
+                ir.emitLine(ic + " = fcmp olt " + res_type + " " + lr + ", " + rr);
+            else
+                ir.emitLine(ic + " = icmp slt " + res_type + " " + lr + ", " + rr);
+            auto z = ir.tmp("%zext");
+            ir.emitLine(z + " = zext i1 " + ic + " to i32");
+            return "i32 " + z;
+        }
+        case TokenType::LessThanEquals: {
+            auto ic = ir.tmp("%ic");
+            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
+                ir.emitLine(ic + " = fcmp ole " + res_type + " " + lr + ", " + rr);
+            else
+                ir.emitLine(ic + " = icmp sle " + res_type + " " + lr + ", " + rr);
+            auto z = ir.tmp("%zext");
+            ir.emitLine(z + " = zext i1 " + ic + " to i32");
+            return "i32 " + z;
+        }
+        case TokenType::GreaterThan: {
+            auto ic = ir.tmp("%ic");
+            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
+                ir.emitLine(ic + " = fcmp ogt " + res_type + " " + lr + ", " + rr);
+            else
+                ir.emitLine(ic + " = icmp sgt " + res_type + " " + lr + ", " + rr);
+            auto z = ir.tmp("%zext");
+            ir.emitLine(z + " = zext i1 " + ic + " to i32");
+            return "i32 " + z;
+        }
+        case TokenType::GreaterThanEquals: {
+            auto ic = ir.tmp("%ic");
+            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
+                ir.emitLine(ic + " = fcmp oge " + res_type + " " + lr + ", " + rr);
+            else
+                ir.emitLine(ic + " = icmp sge " + res_type + " " + lr + ", " + rr);
+            auto z = ir.tmp("%zext");
+            ir.emitLine(z + " = zext i1 " + ic + " to i32");
+            return "i32 " + z;
+        }
+
+        // Logical (i1)
+        case TokenType::AndAnd:
+            ir.emitLine(t + " = and i1 " + lr + ", " + rr);
+            return "i1 " + t;
+        case TokenType::OrOr:
+            ir.emitLine(t + " = or i1 " + lr + ", " + rr);
+            return "i1 " + t;
+
+        // Bitwise
+        case TokenType::And:
+            ir.emitLine(t + " = and " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+        case TokenType::Or:
+            ir.emitLine(t + " = or " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+        case TokenType::Caret:
+            ir.emitLine(t + " = xor " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+        case TokenType::ShiftLeft:
+            ir.emitLine(t + " = shl " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+        case TokenType::ShiftRight:
+            ir.emitLine(t + " = ashr " + res_type + " " + lr + ", " + rr);
+            return res_type + " " + t;
+
+        default:
+            return lhs;
+    }
 }
 
+// ── Unary operations ────────────────────────────────────────────────────────
+
 std::string Codegen::genUnary(ASTNode* node) {
-    if (!node) return "i32 0";
+    if (!node || !node->token) return "i32 0";
+    std::string op = node->token->value;
     auto inner = node->left ? genExpr(node->left) : "i32 0";
-    std::string op = node->token ? node->token->value : "?";
-    auto t = ir.tmp();
-    ir.emitLine("; unary: " + op + " " + inner);
-    ir.emitLine(t + " = add i32 0, 0  ; placeholder for unary " + op);
-    return t;
+
+    std::string ty, reg;
+    auto sp = inner.find(' ');
+    if (sp != std::string::npos) { ty = inner.substr(0, sp); reg = inner.substr(sp + 1); }
+    else { ty = "i32"; reg = inner; }
+
+    auto t = ir.tmp("%un");
+
+    if (op == "-") {
+        if (ty == "double" || ty == "float" || ty == "fp128" || ty == "half") {
+            ir.emitLine(t + " = fneg " + ty + " " + reg);
+        } else {
+            auto zero = ir.tmp("%zero");
+            ir.emitLine(zero + " = add " + ty + " 0, 0"); // or use a constant
+            ir.emitLine(t + " = sub " + ty + " 0, " + reg);
+        }
+        return ty + " " + t;
+    }
+    if (op == "!") {
+        auto one = ir.tmp("%one");
+        ir.emitLine(one + " = add " + ty + " 0, 0"); // zero
+        ir.emitLine(t + " = sub " + ty + " 1, " + reg); // 1 - x
+        return ty + " " + t;
+    }
+    if (op == "~") {
+        ir.emitLine(t + " = xor " + ty + " " + reg + ", -1");
+        return ty + " " + t;
+    }
+    if (op == "&") {
+        // address-of: the alloca register is already the address
+        auto it = node->left && node->left->token ? locals.find(node->left->token->value) : locals.end();
+        if (it != locals.end()) {
+            return "ptr " + it->second;
+        }
+        return "ptr undef";
+    }
+    if (op == ".*") {
+        // dereference
+        ir.emitLine(t + " = load i32, i32* " + reg);
+        return "i32 " + t;
+    }
+    return inner;
 }
+
+// ── Function calls ──────────────────────────────────────────────────────────
 
 std::string Codegen::genCall(ASTNode* node) {
     if (!node || !node->token) return "i32 0";
     auto& name = node->token->value;
-    ir.emitLine("; call: " + name);
-    auto t = ir.tmp();
-    ir.emitLine(t + " = call i32 @" + name + "()  ; placeholder call");
-    return t;
+    std::string args;
+    if (node->children) {
+        for (size_t i = 0; i < node->children->size(); i++) {
+            if (i > 0) args += ", ";
+            auto* arg = (*node->children)[i];
+            if (arg->left) args += genExpr(arg->left);
+        }
+    }
+    auto t = ir.tmp("%call");
+    ir.emitLine(t + " = call i32 @" + name + "(" + args + ")");
+    return "i32 " + t;
 }
+
+// ── Member access ───────────────────────────────────────────────────────────
 
 std::string Codegen::genMemberAccess(ASTNode* node) {
     if (!node) return "i32 0";
-    ir.emitLine("; member access");
     if (node->left) genExpr(node->left);
-    return ir.tmp();
+    return "i32 undef";
+}
+
+// ── Expression type helper ───────────────────────────────────────────────────
+
+std::string Codegen::exprType(ASTNode* node) {
+    if (!node) return "i32";
+    switch (node->node_type) {
+        case ASTNodeType::IntegerLiteral: return "i32";
+        case ASTNodeType::FloatLiteral:   return "double";
+        case ASTNodeType::BoolLiteral:    return "i1";
+        case ASTNodeType::CharLiteral:    return "i8";
+        case ASTNodeType::StringLiteral:  return "i8*";
+        default: return "i32";
+    }
 }
 
 } // namespace codegen
