@@ -39,17 +39,30 @@ async func fetch_api(url: str) -> !str {
 
 ### External Functions (FFI)
 `ext func` allows Razen to call functions implemented in other languages (usually C).
+
+`ext struct`, `ext enum`, and `ext union` are supported for implementing behaviours on types from outside their original definition.
+
 ```razen
 ext func printf(fmt: str, ...) -> int
+
+ext struct int ~> Printable {
+    func print_info(p: @Self) -> void {
+        fmt.println("Value: {}", .{p})
+    }
+}
 ```
 
 ## Generics
 
 ### The `@Generic` Attribute
-Razen uses `@Generic(T)` to define a type parameter. The compiler generates specialized versions of the function for each type used.
+Razen uses `@Generic(T)` to define a type parameter. Multiple type parameters are supported with `@Generic(T, E)`. The compiler generates specialized versions of the function for each type combination used.
 ```razen
 @Generic(T) func identity(val: T) -> T {
     ret val
+}
+
+@Generic(T, E) func pair(first: T, second: E) -> .{T, E} {
+    ret .{first, second}
 }
 ```
 

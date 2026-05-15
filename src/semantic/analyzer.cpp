@@ -348,6 +348,7 @@ TypeInfo* Analyzer::anaNode(ASTNode* node) {
         case ASTNodeType::ElseBody:
         case ASTNodeType::LoopBody:
         case ASTNodeType::MatchBody:
+        case ASTNodeType::CaptureBlock:
             return anaBody(node);
 
         case ASTNodeType::MatchCase:
@@ -414,7 +415,8 @@ TypeInfo* Analyzer::anaNode(ASTNode* node) {
 
         case ASTNodeType::BuiltinExpression: return nullptr;
 
-        case ASTNodeType::ArrayLiteral: {
+        case ASTNodeType::ArrayLiteral:
+        case ASTNodeType::TupleLiteral: {
             if (node->children)
                 for (auto* elem : *node->children) anaNode(elem);
             return nullptr;

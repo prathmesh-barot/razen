@@ -101,7 +101,6 @@ static void processGlobalToken(ASTData& d) {
 
     switch (tok.type) {
         case TokenType::Comment:
-        case TokenType::EndComment:
         case TokenType::EOF_:
             d.advance();
             break;
@@ -320,7 +319,6 @@ static void processStatement(ASTData& d, ASTNode* body) {
 
     switch (tok.type) {
         case TokenType::Comment:
-        case TokenType::EndComment:
         case TokenType::EOF_:
             d.advance();
             break;
@@ -613,6 +611,7 @@ static ASTNode* parseFuncDecl(ASTData& d, bool is_pub) {
     d.advance();
 
     // check for ~> rename: func new_name ~> Trait.original(args) -> ret { body }
+    std::string rename_path;
     std::optional<Token> tilde_check = d.peekToken(0);
     if (tilde_check && tilde_check->type == TokenType::TildeArrow) {
         d.advance(); // consume ~>
@@ -620,6 +619,8 @@ static ASTNode* parseFuncDecl(ASTData& d, bool is_pub) {
         while (d.hasMore()) {
             Token pt = d.getToken();
             if (pt.type == TokenType::Identifier) {
+                if (!rename_path.empty()) rename_path += ".";
+                rename_path += pt.value;
                 d.advance();
             } else if (pt.type == TokenType::Dot) {
                 d.advance();
@@ -670,6 +671,12 @@ static ASTNode* parseFuncDecl(ASTData& d, bool is_pub) {
     func->middle = params;
     func->right = body;
     func->is_pub = is_pub;
+    if (!rename_path.empty()) {
+        ASTNode* rename_n = createDefaultAstNode();
+        rename_n->node_type = ASTNodeType::Annotation;
+        rename_n->token = Token{TokenType::Identifier, rename_path, 0, 0};
+        appendChild(func, rename_n);
+    }
     return func;
 }
 
@@ -1284,6 +1291,27 @@ static ASTNode* parseStruct(ASTData& d, bool is_pub) {
             d.advance();
         }
     }
+
+    if (n->children && n->children->size() > 0) {
+        ASTNode* trait_list = createDefaultAstNode();
+        trait_list->node_type = ASTNodeType::Parameters;
+        trait_list->children = createChildList();
+        std::vector<ASTNode*> keep;
+        for (auto* child : *n->children) {
+            if (child->node_type == ASTNodeType::Identifier)
+                trait_list->children->push_back(child);
+            else
+                keep.push_back(child);
+        }
+        if (trait_list->children->size() > 0) {
+            n->children->clear();
+            for (auto* k : keep) n->children->push_back(k);
+            n->middle = trait_list;
+        } else {
+            delete trait_list->children;
+            delete trait_list;
+        }
+    }
     return n;
 }
 
@@ -1384,6 +1412,27 @@ static ASTNode* parseEnum(ASTData& d, bool is_pub) {
             if (comma.type == TokenType::Comma) d.advance();
         } else {
             d.advance();
+        }
+    }
+
+    if (n->children && n->children->size() > 0) {
+        ASTNode* trait_list = createDefaultAstNode();
+        trait_list->node_type = ASTNodeType::Parameters;
+        trait_list->children = createChildList();
+        std::vector<ASTNode*> keep;
+        for (auto* child : *n->children) {
+            if (child->node_type == ASTNodeType::Identifier)
+                trait_list->children->push_back(child);
+            else
+                keep.push_back(child);
+        }
+        if (trait_list->children->size() > 0) {
+            n->children->clear();
+            for (auto* k : keep) n->children->push_back(k);
+            n->middle = trait_list;
+        } else {
+            delete trait_list->children;
+            delete trait_list;
         }
     }
     return n;
@@ -1513,6 +1562,27 @@ static ASTNode* parseUnion(ASTData& d, bool is_pub) {
             n->children->push_back(m);
         } else {
             d.advance();
+        }
+    }
+
+    if (n->children && n->children->size() > 0) {
+        ASTNode* trait_list = createDefaultAstNode();
+        trait_list->node_type = ASTNodeType::Parameters;
+        trait_list->children = createChildList();
+        std::vector<ASTNode*> keep;
+        for (auto* child : *n->children) {
+            if (child->node_type == ASTNodeType::Identifier)
+                trait_list->children->push_back(child);
+            else
+                keep.push_back(child);
+        }
+        if (trait_list->children->size() > 0) {
+            n->children->clear();
+            for (auto* k : keep) n->children->push_back(k);
+            n->middle = trait_list;
+        } else {
+            delete trait_list->children;
+            delete trait_list;
         }
     }
     return n;

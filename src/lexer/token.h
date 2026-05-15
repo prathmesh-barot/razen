@@ -30,7 +30,7 @@ enum class TokenType {
     Try, Catch, Defer, Test, True, False, Async, Needs,
 
     // operators and separators
-    Comment, EndComment,
+    Comment,
     Equals, ColonEquals, PlusEquals, MinusEquals, StarEquals, SlashEquals, PercentEquals,
     Plus, Minus, Star, Slash, Percent,
     EqualsEquals, NotEquals,
@@ -43,7 +43,6 @@ enum class TokenType {
     Arrow, BigArrow, TildeArrow,
     DotDotDot, DotDot, DotDotEquals,
     At,
-    NA,
     EOF_
 };
 

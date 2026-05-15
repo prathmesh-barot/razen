@@ -17,6 +17,7 @@ enum class ASTNodeType {
     CharLiteral,
     BoolLiteral,
     ArrayLiteral,
+    TupleLiteral,
     ArrayType,
 
     // declarations
@@ -75,6 +76,7 @@ enum class ASTNodeType {
     MatchStatement,
     MatchCase,
     MatchBody,
+    CaptureBlock,
     TryExpression,
     CatchExpression,
     DeferStatement,

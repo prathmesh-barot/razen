@@ -24,7 +24,12 @@
 | `skip`   | skip to the next loop iteration              | Control Flow   |
 | `try`    | propagate an error up the call               | Error Handling |
 | `catch`  | handle an error from a result                | Error Handling |
-| `defer`  | run a statement when the current scope exits | Control Flow   |
+| `defer`  | run a statement when the current scope exits | Control Flow |
+| `async` | declare an async function                  | Control Flow   |
+| `needs` | declare a behaviour requirement field       | Declaration    |
+| `test`  | declare a test function                     | Declaration    |
+| `true`  | boolean true literal                        | Literal        |
+| `false` | boolean false literal                       | Literal        |
 
 # Symbols
 
@@ -50,6 +55,7 @@
 | `>=`    |                      | Comparison       |
 | `!`     |                      | Logical          |
 | `&&`    |                      | Logical          |
+| `||`    |                      | Logical          |
 | `&`     |                      | Bitwise          |
 | `|`    |                      | Bitwise          |
 | `^`     |                      | Bitwise          |
@@ -64,6 +70,7 @@
 | `:`     |                      |                  |
 | `,`     |                      |                  |
 | `=>`    |                      |                  |
+| `~>`    |                      | Behaviour        |
 | `...`   |                      |                  |
 | `..=`   |                      |                  |
 | `..`    |                      |                  |
@@ -100,6 +107,7 @@
 | `usize`               |       |          |              |
 | `uint = u32`          |       |          |              |
 | `f32`                 |       | Numeric  |              |
+| `f16`                 |       |          |              |
 | `f64`                 |       |          |              |
 | `f128`                |       |          |              |
 | `float = f32`         |       |          |              |

@@ -296,7 +296,7 @@ ASTNode* parsePrimary(ASTData& d) {
             }
 
             ASTNode* n = createDefaultAstNode();
-            n->node_type = ASTNodeType::MatchBody;
+            n->node_type = ASTNodeType::CaptureBlock;
             n->token = cap_tok;
             n->left = body_expr;
             return n;
@@ -322,7 +322,7 @@ ASTNode* parsePrimary(ASTData& d) {
             if (next_tok.type == TokenType::LeftBrace) {
                 d.advance();
                 ASTNode* n = createDefaultAstNode();
-                n->node_type = ASTNodeType::ArrayLiteral;
+                n->node_type = ASTNodeType::TupleLiteral;
                 n->token = tok;
                 n->children = createChildList();
                 size_t guard_t = 0;

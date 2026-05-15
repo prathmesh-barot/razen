@@ -3,7 +3,7 @@
 Razen provides a set of lean, explicit control flow primitives designed for predictability and performance.
 
 ## Conditionals
-The `if` statement handles branching.
+The `if` statement handles branching. You can chain multiple conditions using `else if`:
 
 ```razen
 if score > 90 {
@@ -77,6 +77,8 @@ try {
 ## Defer
 The `defer` keyword schedules a block of code to run exactly when the current scope exits. This is essential for resource cleanup (e.g., closing files or releasing locks).
 
+`defer` accepts a single statement without braces (`defer stmt`), or a block `{ }` for multiple statements.
+
 ```razen
 func process_file() -> void {
     const file = open_file("test.txt")
@@ -87,3 +89,31 @@ func process_file() -> void {
 ```
 
 Defers are executed in **Last-In, First-Out (LIFO)** order.
+
+## Range Expressions
+Range expressions create a range of values using `..` (inclusive-exclusive) and `..=` (inclusive-inclusive).
+
+```razen
+// Exclusive range: 0, 1, 2, 3, 4
+range1 := 0..5
+
+// Inclusive range: 0, 1, 2, 3, 4, 5
+range2 := 0..=5
+```
+
+Ranges are commonly used with loops and slices.
+
+## Capture Blocks
+Capture blocks use the `|e|` syntax to create a closure or inline expression context.
+
+```razen
+// Single expression capture
+filtered := items.filter(|e| e > 0)
+
+// Block body capture
+sorted := items.sort(|a, b| {
+    if a < b { ret Ordering.Less }
+    else if a > b { ret Ordering.Greater }
+    else { ret Ordering.Equal }
+})
+```

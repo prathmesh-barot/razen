@@ -1,5 +1,16 @@
 # Basics
 
+## Comments
+
+Razen supports `//` single-line comments and `/* */` block comments.
+
+```razen
+// This is a single-line comment
+x := 10 /* inline comment */
+/* Block
+   comment */
+```
+
 ## Variables and Constants
 
 Razen separates immutable and mutable bindings, and runtime variables from compile-time constants.
@@ -46,7 +57,7 @@ Razen provides a flexible integer system. In addition to standard widths, it sup
 - **Shorthands**: `int` (defaults to `i32`), `uint` (defaults to `u32`).
 
 ### Floating Point
-- `f32`, `f64`, `f128`.
+- `f16`, `f32`, `f64`, `f128`.
 - **Shorthand**: `float` (defaults to `f32`).
 
 ### Other Scalars

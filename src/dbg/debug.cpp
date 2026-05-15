@@ -85,7 +85,6 @@ const char* tokenTypeName(TokenType tt) {
         case TokenType::Async: return "Async";
         case TokenType::Needs: return "Needs";
         case TokenType::Comment: return "Comment";
-        case TokenType::EndComment: return "EndComment";
         case TokenType::Equals: return "Equals";
         case TokenType::ColonEquals: return "ColonEquals";
         case TokenType::PlusEquals: return "PlusEquals";
@@ -131,7 +130,6 @@ const char* tokenTypeName(TokenType tt) {
         case TokenType::DotDot: return "DotDot";
         case TokenType::DotDotEquals: return "DotDotEquals";
         case TokenType::At: return "At";
-        case TokenType::NA: return "NA";
         case TokenType::EOF_: return "EOF";
     }
     return "Unknown";
@@ -145,6 +143,7 @@ const char* nodeTypeName(ASTNodeType nt) {
         case ASTNodeType::StringLiteral: return "StringLiteral";
         case ASTNodeType::CharLiteral: return "CharLiteral";
         case ASTNodeType::BoolLiteral: return "BoolLiteral";
+        case ASTNodeType::TupleLiteral: return "TupleLiteral";
         case ASTNodeType::ArrayLiteral: return "ArrayLiteral";
         case ASTNodeType::ArrayType: return "ArrayType";
         case ASTNodeType::VarDeclaration: return "VarDeclaration";
@@ -190,6 +189,7 @@ const char* nodeTypeName(ASTNodeType nt) {
         case ASTNodeType::MatchStatement: return "MatchStatement";
         case ASTNodeType::MatchCase: return "MatchCase";
         case ASTNodeType::MatchBody: return "MatchBody";
+        case ASTNodeType::CaptureBlock: return "CaptureBlock";
         case ASTNodeType::TryExpression: return "TryExpression";
         case ASTNodeType::CatchExpression: return "CatchExpression";
         case ASTNodeType::DeferStatement: return "DeferStatement";
@@ -215,6 +215,7 @@ static const char* nodeColour(ASTNodeType nt) {
         case ASTNodeType::ModuleDeclaration:
         case ASTNodeType::UseDeclaration: return GREEN_;
         case ASTNodeType::ReturnStatement: return CYAN_;
+        case ASTNodeType::CaptureBlock:
         case ASTNodeType::BreakStatement:
         case ASTNodeType::SkipStatement: return CYAN_;
         case ASTNodeType::IfStatement:
@@ -230,6 +231,7 @@ static const char* nodeColour(ASTNodeType nt) {
         case ASTNodeType::BoolLiteral:
         case ASTNodeType::CharLiteral:
         case ASTNodeType::StringLiteral:
+        case ASTNodeType::TupleLiteral:
         case ASTNodeType::ArrayLiteral: return ORANGE_;
         case ASTNodeType::Identifier:
         case ASTNodeType::EnumField:
