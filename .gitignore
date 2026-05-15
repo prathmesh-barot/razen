@@ -1,0 +1,21 @@
+# Build
+build/
+razenc
+*.o
+*.obj
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Zig (if mixed)
+.zig-cache/
+zig-out/
