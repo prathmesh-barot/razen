@@ -521,10 +521,11 @@ TypeInfo* Analyzer::anaVarDecl(ASTNode* node) {
     auto& name = tok->value;
 
     TypeInfo* decl_type = node->left ? resolveTypeFromNode(node->left) : nullptr;
+    TypeInfo* init_type = nullptr;
 
     // check initializer type against declared type
     if (node->right) {
-        auto* init_type = anaNode(node->right);
+        init_type = anaNode(node->right);
         if (decl_type && init_type) {
             std::string why;
             if (!typesCompatible(decl_type, init_type, &why)) {
@@ -548,13 +549,13 @@ TypeInfo* Analyzer::anaVarDecl(ASTNode* node) {
         auto* sym = new Symbol();
         sym->name = name;
         sym->symbol_type = SymbolType::Variable;
-        sym->resolved_type = decl_type;
+        sym->resolved_type = decl_type ? decl_type : init_type;
         sym->token = *tok;
         sym->is_mut = node->is_mut;
         sym->is_const = node->is_const;
         sym_table.define(sym);
     }
-    return decl_type;
+    return decl_type ? decl_type : init_type;
 }
 
 // ── assignment ──────────────────────────────────────────────────────────────
@@ -692,6 +693,26 @@ TypeInfo* Analyzer::anaMatch(ASTNode* node) {
             if (case_node->right && case_node->right->node_type == ASTNodeType::MatchBody) {
                 auto* match_scope = new Scope();
                 sym_table.pushScope(match_scope);
+
+                // Register bound variables from destructure patterns: Value.Int(v)
+                if (case_node->left &&
+                    case_node->left->node_type == ASTNodeType::MemberAccess &&
+                    case_node->left->right &&
+                    case_node->left->right->node_type == ASTNodeType::FunctionCall) {
+                    auto* call = case_node->left->right;
+                    if (call->children) {
+                        for (auto* arg : *call->children) {
+                            if (arg->left && arg->left->node_type == ASTNodeType::Identifier && arg->left->token) {
+                                auto* vsym = new Symbol();
+                                vsym->name = arg->left->token->value;
+                                vsym->symbol_type = SymbolType::Variable;
+                                vsym->token = *arg->left->token;
+                                sym_table.define(vsym);
+                            }
+                        }
+                    }
+                }
+
                 if (case_node->right->left) anaNode(case_node->right->left);
                 sym_table.popScope();
             }
@@ -823,8 +844,20 @@ TypeInfo* Analyzer::anaMemberAccess(ASTNode* node) {
 
     if (node->right) {
         auto* right_node = node->right;
-        if (right_node->node_type == ASTNodeType::FunctionCall)
-            return anaNode(right_node);
+
+        // Union constructor: Value.Int(42) or Value.Int(v) in match
+        if (right_node->node_type == ASTNodeType::FunctionCall &&
+            (left_type->category == TypeCategory::Union ||
+             left_type->category == TypeCategory::Named)) {
+            // Analyze arguments (skip identifiers — they're match bindings, not variable refs)
+            if (right_node->children) {
+                for (auto* arg : *right_node->children) {
+                    if (arg->left && arg->left->node_type != ASTNodeType::Identifier)
+                        anaNode(arg->left);
+                }
+            }
+            return left_type;
+        }
 
         if (right_node->token) {
             auto& field_name = right_node->token->value;
@@ -845,6 +878,11 @@ TypeInfo* Analyzer::anaMemberAccess(ASTNode* node) {
 
             // enum variant access (e.g. Color.Red)
             if (left_type->category == TypeCategory::Enum) {
+                return left_type;
+            }
+
+            // Union variant access w/o payload: Value.Int (as expression)
+            if (left_type->category == TypeCategory::Union) {
                 return left_type;
             }
         }
@@ -938,6 +976,12 @@ bool Analyzer::typesCompatible(const TypeInfo* expected, const TypeInfo* actual,
     if (expected->category == TypeCategory::Any) return true;
     if (expected->category == TypeCategory::Unknown) return true;
     if (actual->category == TypeCategory::Unknown) return true;
+    // null/any can be assigned to optional, failable, error union, pointer types
+    if (actual->category == TypeCategory::Any &&
+        (expected->category == TypeCategory::Optional ||
+         expected->category == TypeCategory::Failable ||
+         expected->category == TypeCategory::Pointer))
+        return true;
 
     // same category
     if (expected->category == actual->category) {

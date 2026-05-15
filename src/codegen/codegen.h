@@ -15,14 +15,34 @@ struct Codegen {
     // local variable map: name → alloca register
     std::unordered_map<std::string, std::string> locals;
     std::unordered_map<std::string, std::string> local_types;
-    // current function return type (LLVM string)
     std::string current_ret_type;
     bool has_return_emitted = false;
 
-    // deferred statements for current function
     std::vector<ASTNode*> deferred_stmts;
-    // struct field name map: struct_name → field names
     std::unordered_map<std::string, std::vector<std::string>> struct_types;
+
+    // Enum data
+    std::unordered_map<std::string, std::unordered_map<std::string, int>> enum_values;
+    std::unordered_map<std::string, std::string> enum_backing_types;
+
+    // Union data
+    struct UnionFieldInfo {
+        std::string name;
+        int tag;
+        std::string payload_type;
+        int payload_size;
+    };
+    std::unordered_map<std::string, std::vector<UnionFieldInfo>> union_variants;
+    std::unordered_map<std::string, int> union_payload_sizes;
+
+    // Struct methods + field type info
+    std::unordered_map<std::string, std::vector<ASTNode*>> struct_methods;
+    std::string current_struct_name;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> struct_field_types;
+
+    // Error handling
+    std::unordered_map<std::string, std::unordered_map<std::string, int>> error_values;
+    std::string current_catch_label;
 
     Codegen(const std::string& name = "main.rz") : source_name(name) {}
 
@@ -48,6 +68,23 @@ private:
     std::string genMemberAccess(ASTNode* node);
     std::string exprType(ASTNode* node);
     void emitDeferred();
+
+    // Phase 17-20 additions
+    void genEnumDecl(ASTNode* node);
+    void genUnionDecl(ASTNode* node);
+    void genErrorDecl(ASTNode* node);
+    std::string genTryExpression(ASTNode* node);
+    std::string genArrayLiteral(ASTNode* node);
+    std::string genTupleLiteral(ASTNode* node);
+    std::string genRangeLiteral(ASTNode* node);
+    bool isErrorVariant(ASTNode* node, std::string* out_set, int* out_code);
+    bool isEnumName(const std::string& name);
+    bool isUnionName(const std::string& name);
+    bool isErrorSetName(const std::string& name);
+    std::string genEnumMemberAccess(ASTNode* node);
+    std::string genUnionConstruct(ASTNode* node);
+    std::string resolveType(ASTNode* type_node);
+    int getLLVMTypeSize(const std::string& type_str);
 };
 
 } // namespace codegen
