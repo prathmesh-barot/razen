@@ -1,9 +1,8 @@
 # Behaviours
 
-Behaviours (also known as traits) define a contract that a type must satisfy. They enable polymorphism and code reuse without the overhead of class-based inheritance.
+Behaviours (traits) define interfaces that types implement explicitly. No implicit impl discovery.
 
-## Defining a Behaviour
-A behaviour is declared with the `behave` keyword. In the declaration, all methods must use the `func` keyword.
+## Defining a behaviour
 
 ```razen
 behave Printable {
@@ -11,61 +10,55 @@ behave Printable {
 }
 ```
 
-## Behaviour Requirements (`needs`)
-One of Razen's unique features is the `needs` keyword. Behaviours can require that any implementing type possess specific fields. This allows the behaviour to define methods that operate on those fields safely.
+`@Self` refers to the type that will implement the behaviour.
+
+## Field requirements (`needs`)
+
+Behaviours can require implementing types to have specific fields:
 
 ```razen
 behave Identifiable {
-    needs id: usize // Requirement: type must have an 'id' field of type usize
+    needs id: usize
 
     func get_id(p: @Self) -> usize {
-        ret p.id // Guaranteed to exist by the 'needs' clause
+        ret p.id
     }
 }
 ```
 
-## Implementing Behaviours
+Methods with default bodies can use `needs` fields safely — the compiler guarantees they exist.
 
-A type implements a behaviour using the `~>` operator.
+## Implementing a behaviour
 
-### The `func` Keyword Rules
-Razen reduces boilerplate by changing how the `func` keyword is used during implementation:
+Use `~>` (tilde arrow) to attach a behaviour to a type.
 
-| Context | Use `func`? | Example |
-| :--- | :--- | :--- |
-| **Behaviour Declaration** | **Yes** | `behave T { func do_work() }` |
-| **Direct Method** (in Struct/Enum) | **Yes** | `struct S { func helper() { ... } }` |
-| **Behaviour Implementation** | **No** | `struct S ~> T { do_work() { ... } }` |
-| **Renaming Behaviour Method** | **Yes** | `struct S ~> T { func custom_name ~> T.do_work() }` |
-
-#### Standard Implementation
-When implementing a behaviour, you do **not** use the `func` keyword. You simply use the method name defined in the behaviour.
+### Direct implementation — no `func` keyword
 
 ```razen
 struct User ~> Printable {
     name: str,
 
-    // No 'func' keyword needed here because it implements Printable.print_info
-    print_info(p: *User) -> void { 
+    print_info(p: *User) -> void {
         fmt.println("User: {}", .{p.name})
     }
 }
 ```
 
-#### Renaming Implementation
-If you wish to implement a behaviour method under a different name, you **must** use the `func` keyword and the `~>` mapping operator.
+Inside a behaviour impl block, use the method name directly (no `func`).
+
+### Renaming — requires `func`
 
 ```razen
 struct Animal ~> Dog {
-    // Use 'func' to rename Dog.speak to bark_loudly
     func bark_loudly ~> Dog.speak(a: *Animal) {
         fmt.println("Woof!")
     }
 }
 ```
 
-## Extending Types (`ext`)
-You can implement a behaviour for a type from outside its original definition using `ext`. This is useful for adding functionality to built-in types or types from other modules.
+Use `func new_name ~> Behaviour.method(...)` to map a differently-named method.
+
+## External implementations (`ext`)
 
 ```razen
 ext struct int ~> Printable {
@@ -75,13 +68,52 @@ ext struct int ~> Printable {
 }
 ```
 
-## Dynamic Dispatch (`@Dyn`)
-The `@Dyn` attribute allows for dynamic dispatch. It creates a trait object that can hold any type implementing the behaviour, resolving the method call at runtime.
+`ext` works on `struct`, `enum`, `union`, and `func` declarations.
+
+## Dynamic dispatch (`@Dyn`)
+
+Mark a behaviour with `@Dyn` to enable runtime dispatch via trait objects:
 
 ```razen
+@Dyn behave Printable {
+    func print_info(p: @Self) -> void
+}
+
 func print_all(items: []@Dyn Printable) {
     for item in items {
         item.print_info()
     }
 }
 ```
+
+## Multiple implementations per type
+
+```razen
+struct Animal ~> Dog, Cat {
+    name: str,
+    voice: str,
+
+    func dog_speak ~> Dog.speak(a: *Animal) { ... }
+    func cat_speak ~> Cat.speak(a: *Animal) { ... }
+}
+```
+
+## Behaviour inheritance
+
+```razen
+behave Child ~> Parent {
+    func extra_method(p: @Self) -> void
+}
+```
+
+A behaviour can extend one or more parent behaviours, inheriting their method contracts.
+
+## Rules
+
+| Context | `func` keyword? |
+|---------|----------------|
+| Behaviour declaration | Yes |
+| Direct method on struct/enum/union | Yes |
+| Behaviour implementation | No |
+| Renaming (`~>`) | Yes |
+| External impl (`ext`) | Yes |

@@ -1,31 +1,37 @@
 # Introduction
 
-Razen is a systems programming language built for developers who demand clarity, explicit control, and absolute performance. It provides powerful primitives that map predictably to the underlying hardware, ensuring no behavior is hidden from the developer.
+Razen is a systems programming language. No hidden magic, no implicit allocations, no runtime overhead you didn't ask for. The code you write is the code that executes.
 
 ## Philosophy
 
-Razen is guided by four core principles:
+**Meaningful, Accurate, Simple, Maximum Performance.**
 
-1.  **Meaningful & Accurate**: Every construct has a singular, clear purpose. No ambiguous behaviors; no hidden logic.
-2.  **Simplicity**: Complexity is a liability. If a feature doesn't directly improve performance or safety, it is excluded.
-3.  **Maximum Performance**: Zero-cost abstractions. Razen ensures that high-level code compiles to the most efficient machine instructions possible.
-4.  **No Hidden Magic**: No implicit conversions, no hidden allocations, and zero runtime overhead. The code you write is the code that executes.
+- **Meaningful** — Every construct has exactly one job. No ambiguous syntax, no context-dependent behavior.
+- **Accurate** — Types, memory, and control flow are explicit. Nothing happens behind your back.
+- **Simple** — Complexity is a liability. Features earn their place by improving performance or safety, not by adding sugar.
+- **Maximum Performance** — Zero-cost abstractions. High-level code compiles to the machine instructions you'd write by hand.
 
-## Position in the Ecosystem
+## Four Pillars
 
-Razen is not a replacement for Zig or other systems languages. Instead, it is designed to complement them. It aims to provide a specialized toolset for the next generation of modern software.
+| Pillar | Meaning |
+|--------|---------|
+| No hidden allocs | Every allocation takes an explicit allocator parameter. No GC, no heap-allocated closures. |
+| No implicit casts | All type conversions are spelled out. `@as(T, expr)` or `T(expr)`. |
+| Predictable control flow | No exceptions. Errors are values (`!T`, `Error!T`). `defer` runs at scope exit. |
+| Compile-time evaluation | `const` and `const func` execute at comptime. No runtime metaprogramming. |
 
-**Primary Targets:**
-- **AI/ML**: High-performance tensor operations and model infrastructure.
-- **Servers**: Low-latency, high-concurrency backend systems.
-- **App Development**: Resource-efficient core logic for modern applications.
+## Who This Is For
 
-If you are building modern, performance-critical software, Razen provides the precision and speed required for the task.
+Engineers who work in C, Zig, Rust, or Go and want:
+- Rust's type safety without the borrow checker complexity
+- Zig's explicitness with more syntactic convenience
+- C's performance without the footguns
+- Go's simplicity with real control over memory
 
-## Development Status
+## Status
 
-**Warning: Razen is in early development.**
+**Early development. Experimental. Not production-ready.**
 
-The language is currently an experimental project and is **not yet ready for production use**. Syntax and features are subject to change as the language evolves.
+The lexer, parser, and semantic analyzer are complete. LLVM codegen is in progress. Syntax and semantics will change.
 
-You can track our progress and upcoming features in the [ROADMAP.md](./ROADMAP.md).
+See [ROADMAP.md](../ROADMAP.md) for current progress and milestones.

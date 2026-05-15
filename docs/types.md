@@ -1,134 +1,101 @@
 # Types
 
-Razen uses a precise type system to ensure memory safety and layout control without a garbage collector.
+## Primitives
 
-## Structs
-Structs are the primary way to group related data into a single contiguous block of memory.
+Signed: `i1` `i2` `i4` `i8` `i16` `i32` `i64` `i128` `isize` `int` (= i32)
 
-### Basic Definition
+Unsigned: `u1` `u2` `u4` `u8` `u16` `u32` `u64` `u128` `usize` `uint` (= u32)
+
+Floats: `f16` `f32` `f64` `f128` `float` (= f32)
+
+Other: `bool` `char` `void` `noret` `any`
+
+Arbitrary-width integers up to 32768 bits (`i7`, `u513`, etc.).
+
+## Pointers
+
 ```razen
-struct User {
-    id: usize,
-    username: str,
-    active: bool,
-}
+ptr : *T          // pointer to T
+addr := &x        // address-of, returns *T
+val := ptr.*      // dereference
 ```
 
-### Methods in Structs
-You can define functions directly inside a struct. These functions can take a pointer to the struct (`*Self`) or a mutable pointer (`mut *Self`).
+## Optionals
 
 ```razen
-struct Counter {
-    value: int,
-
-    func increment(mut self: *Counter) {
-        self.value += 1
-    }
-
-    func get_val(self: *Counter) -> int {
-        ret self.value
-    }
-}
+opt : ?T          // may hold T or null
 ```
 
-## Enums
-Enums represent a value that is one of several possible variants.
+Nullable pointers use `?*T`.
 
-### Simple Enums
-Unit variants used for state or category.
+## Failables
+
 ```razen
-enum Status {
-    Idle,
-    Running,
-    Stopped,
-}
+result : !T       // returns T or an anonymous error
 ```
 
-### Backed Enums
-Enums can be backed by an integer type for efficient storage and FFI.
+## Error Unions
+
 ```razen
-enum HttpCode : u16 {
-    Ok = 200,
-    NotFound = 404,
-    InternalError = 500,
-}
+result : IOError!T        // named error set
+result : error!T          // anonymous error set
 ```
 
-### Bit-Flags
-By using a backing type, enums can be used as bit-masks.
-```razen
-enum Permission : u8 {
-    Read = 1 << 0,
-    Write = 1 << 1,
-    Exec = 1 << 2,
-}
+`try` propagates the error. `catch` handles it.
 
-// Combine flags using bitwise OR
-perms := Permission.Read | Permission.Write
+## Arrays
+
+```razen
+arr : [T]          // sized array, elements contiguous
+arr : [T; N]       // array with explicit count
+lit := [1, 2, 3]   // array literal
 ```
 
-## Unions
-Unions allow a single memory location to hold different types of data.
+## Slices
 
-### Tagged Unions (Sum Types)
-The most common form of union, where the variant is tracked.
+Planned. Not yet implemented.
+
+## Collections
+
 ```razen
-union Value {
-    Int(i64),
-    Float(f64),
-    Text(str),
-}
+v : vec[T]         // dynamic vector
+m : map{K, V}      // hash map
+s : set{T}          // hash set
 ```
 
-### Struct Variants
-Unions can carry complex data using struct-like syntax.
+## Tuples
+
 ```razen
-union Event {
-    Click { x: i32, y: i32 },
-    KeyPress(char),
-    Quit,
-}
+t := .{1, "hello", true}
 ```
 
-### Recursive Unions
-To create recursive data structures (like trees or linked lists), use pointers within the union variants.
+Unnamed, positional. Access via index.
+
+## Strings
+
 ```razen
-union Node {
-    Value(i64),
-    Add {
-        left: *Node,
-        right: *Node,
-    },
-}
+s1 : str = "literal"     // immutable, points to data section
+mut s2 : string = "heap" // growable, heap-allocated
 ```
 
-## Error Sets
-Error sets are specialized enums used specifically for failure states.
+`str` is a `(ptr, len)` slice. `string` is an owning heap type.
+
+## Special Types
+
+- `void` — no value (function return)
+- `noret` — diverging (never returns)
+- `any` — opaque type, holds anything
+
+## Type Modifiers
 
 ```razen
-error FileError {
-    NotFound,
-    AccessDenied,
-    DiskFull,
-}
+mut x : mut T  // mutable binding of a mutable type
 ```
 
-### The Error Union (`!T`)
-Razen uses the `!T` syntax to denote a return value that can either be an error from a specific set or a successful value of type `T`.
+## Built-in Type References
 
 ```razen
-// Returns a string or a FileError
-func read_config() -> FileError!str {
-    if file_missing {
-        ret FileError.NotFound
-    }
-    ret "config_data"
-}
-```
-
-## Type Aliases
-You can create descriptive names for existing types.
-```razen
-type UserId = usize
-type Result = FileError!str
+@Self         // the current type (inside struct/enum methods)
+@Type         // the type of a value (comptime)
+@Generic(T)   // generic parameter placeholder
 ```

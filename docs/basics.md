@@ -2,98 +2,75 @@
 
 ## Comments
 
-Razen supports `//` single-line comments and `/* */` block comments.
-
 ```razen
-// This is a single-line comment
-x := 10 /* inline comment */
-/* Block
-   comment */
+// single-line
+
+/* multi-line
+   block */
+x := 10 /* inline */
 ```
 
-## Variables and Constants
+## Variables
 
-Razen separates immutable and mutable bindings, and runtime variables from compile-time constants.
-
-### Immutable Variables
-Variables are immutable by default. They cannot be reassigned after initialization.
+Immutable by default. The type can be inferred or explicit:
 
 ```razen
-// Inferred type
-x := 10 
-
-// Explicit type
-y : i32 = 20 
+name := expr        // inferred
+name : Type = expr  // explicit
 ```
 
-### Mutable Variables
-To allow a variable to be changed, use the `mut` keyword.
+Mutable:
 
 ```razen
-mut count := 0
-count += 1
+mut name := expr
+mut name : Type = expr
 ```
 
-### Compile-time Constants
-Constants are evaluated at compile time and must have an explicit type. They are globally accessible if declared at the top level.
+No uninitialized variables. Every binding must have a value.
+
+## Constants
+
+Compile-time evaluated. Must have explicit type.
 
 ```razen
-const MAX_BUFFER_SIZE : usize = 1024
-```
-
-Razen also supports mutable constants that exist only during the compilation phase (comptime variables):
-```razen
-const mut COMPILE_FLAG : bool = false
+const MAX_BUF : usize = 4096
+const mut COUNTER : i32 = 0   // comptime mutable
 ```
 
 ## Primitive Types
 
-### Integers
-Razen provides a flexible integer system. In addition to standard widths, it supports arbitrary bit-widths to precisely match hardware requirements.
+| Category | Types |
+|----------|-------|
+| Signed ints | `i1`, `i2`, `i4`, `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `int` (= i32) |
+| Unsigned ints | `u1`, `u2`, `u4`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `uint` (= u32) |
+| Floats | `f16`, `f32`, `f64`, `f128`, `float` (= f32) |
+| Other | `bool`, `char`, `void`, `noret`, `any` |
+| Strings | `str` (immutable slice), `string` (heap-allocated) |
 
-- **Signed**: `i1`, `i2`, `i4`, `i8`, `i16`, `i32`, `i64`, `i128`, `isize`.
-- **Unsigned**: `u1`, `u2`, `u4`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`.
-- **Arbitrary Widths**: Razen allows widths from 1 up to 32,768 bits (e.g., `i32768`).
-- **Shorthands**: `int` (defaults to `i32`), `uint` (defaults to `u32`).
-
-### Floating Point
-- `f16`, `f32`, `f64`, `f128`.
-- **Shorthand**: `float` (defaults to `f32`).
-
-### Other Scalars
-- `bool`: `true` or `false`.
-- `char`: A single Unicode scalar value.
-- `void`: Denotes the absence of a value (typically for function returns).
-- `noret`: A diverging type for functions that never return (e.g., a panic or an infinite loop).
-- `any`: A type that can hold any value.
-
-## Strings
-Razen differentiates between static and dynamic strings to avoid hidden heap allocations.
-
-1.  **`str` (String Slice)**: An immutable slice of UTF-8 bytes. Usually points to the program's read-only data section.
-    ```razen
-    name : str = "Razen"
-    ```
-2.  **`string` (Heap String)**: A growable, heap-allocated string.
-    ```razen
-    mut s : string = "Hello"
-    s.append(" World")
-    ```
+Arbitrary integer widths up to 32768 bits are supported (e.g. `i7`, `u257`).
 
 ## Operators
 
 ### Arithmetic
-- `+`, `-`, `*`, `/`, `%`
-- Compound: `+=`, `-=`, `*=`, `/=`, `%=`
+
+`+` `-` `*` `/` `%` with compound: `+=` `-=` `*=` `/=` `%=`
 
 ### Comparison
-- `==`, `!=`, `<`, `>`, `<=`, `>=`
 
-### Logical & Bitwise
-- **Logical**: `&&` (AND), `||` (OR), `!` (NOT)
-- **Bitwise**: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `<<` (Left Shift), `>>` (Right Shift)
+`==` `!=` `<` `>` `<=` `>=`
 
-### Miscellaneous
-- `:=` : Inferred declaration.
-- `.` : Member access / Path navigation.
-- `@` : Built-in attribute/intrinsic.
+### Logical
+
+`&&` `||` `!`
+
+### Bitwise
+
+`&` `|` `^` `~` `<<` `>>`
+
+### Assignment
+
+`=` (assign), `:=` (declare+infer)
+
+### Access
+
+`.` member access, `@` builtin/intrinsic prefix

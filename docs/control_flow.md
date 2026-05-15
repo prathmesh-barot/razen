@@ -1,119 +1,95 @@
 # Control Flow
 
-Razen provides a set of lean, explicit control flow primitives designed for predictability and performance.
-
-## Conditionals
-The `if` statement handles branching. You can chain multiple conditions using `else if`:
+## if / else
 
 ```razen
-if score > 90 {
-    fmt.println("Grade A")
-} else if score > 80 {
-    fmt.println("Grade B")
-} else {
-    fmt.println("Grade C")
+if cond { }
+if cond { } else { }
+if cond { } else if cond { } else { }
+```
+
+Condition is any boolean expression. No implicit truthiness.
+
+## loop
+
+Three forms:
+
+```razen
+// infinite
+loop { break }
+
+// conditional — loops while cond is true
+loop cond { }
+
+// iterator — binds item variable per iteration
+loop iter |item| { fmt.println(item) }
+```
+
+- `break` exits the loop.
+- `skip` jumps to next iteration.
+
+## defer
+
+Runs code at scope exit. LIFO order — last defer runs first.
+
+```razen
+{
+    defer { cleanup() }
+    defer file.close()
+    // ... work ...
+} // file.close() runs first, then cleanup()
+```
+
+Accepts a block `defer { }` or a single statement `defer stmt`.
+
+## match
+
+```razen
+match expr {
+    pat => body,
+    ...
 }
 ```
 
-## Loops
-Razen uses a universal `loop` construct. It is an infinite loop by default, and the developer explicitly defines the exit condition.
+### Literal patterns
 
 ```razen
-mut i := 0
-loop {
-    if i >= 10 {
-        break // Exit the loop
-    }
-    fmt.println(i)
-    i += 1
+match code {
+    200 => fmt.println("OK"),
+    404 => fmt.println("Not Found"),
+    else => fmt.println("Other"),
 }
 ```
 
-- `break`: Terminates the loop.
-- `skip`: Skips the current iteration and proceeds to the next.
+The `else` case serves as wildcard / default (`_`).
 
-## Pattern Matching
-The `match` statement is a powerful tool for exhaustive branching based on values, enums, and unions.
+### Enum patterns
 
-### Basic Matching
 ```razen
-match state {
-    State.Idle => fmt.println("Waiting..."),
-    State.Running => fmt.println("Working..."),
-    State.Stopped => fmt.println("Done."),
+match color {
+    Color.Red => fmt.println("red"),
+    Color.Green => fmt.println("green"),
+    Color.Blue => fmt.println("blue"),
 }
 ```
 
-### Union Destructuring
-Payload unions can be destructured directly in the match arm to access their inner data.
+### Union destructuring
 
 ```razen
 match value {
-    Value.Int(n) => fmt.println("Integer: {}", .{n}),
-    Value.Text(s) => fmt.println("String: {}", .{s}),
+    Value.Int(v) => fmt.println("int: {}", .{v}),
+    Value.Float(f) => fmt.println("float: {}", .{f}),
+    Value.Text(s) => fmt.println("str: {}", .{s}),
 }
 ```
 
-### Struct Destructuring
-Matching can also be used to extract fields from structs.
+### Struct destructuring
+
 ```razen
-match user {
-    User { id, active } => fmt.println("User {} is active: {}", .{id, active}),
+match expr {
+    Expr.Binary { left, right, op } => eval_binary(left, right, op),
+    Expr.Number(n) => fmt.println(n),
 }
 ```
 
-## Error Handling (`try` / `catch`)
-Razen handles errors explicitly. The `try` keyword is used to attempt an operation that might return an error.
-
-```razen
-try {
-    const data = read_file("config.txt")
-    fmt.println(data)
-} catch (err) {
-    fmt.println("Error occurred: {}", .{err})
-}
-```
-
-## Defer
-The `defer` keyword schedules a block of code to run exactly when the current scope exits. This is essential for resource cleanup (e.g., closing files or releasing locks).
-
-`defer` accepts a single statement without braces (`defer stmt`), or a block `{ }` for multiple statements.
-
-```razen
-func process_file() -> void {
-    const file = open_file("test.txt")
-    defer file.close() // Executes when process_file returns
-
-    // ... process file ...
-}
-```
-
-Defers are executed in **Last-In, First-Out (LIFO)** order.
-
-## Range Expressions
-Range expressions create a range of values using `..` (inclusive-exclusive) and `..=` (inclusive-inclusive).
-
-```razen
-// Exclusive range: 0, 1, 2, 3, 4
-range1 := 0..5
-
-// Inclusive range: 0, 1, 2, 3, 4, 5
-range2 := 0..=5
-```
-
-Ranges are commonly used with loops and slices.
-
-## Capture Blocks
-Capture blocks use the `|e|` syntax to create a closure or inline expression context.
-
-```razen
-// Single expression capture
-filtered := items.filter(|e| e > 0)
-
-// Block body capture
-sorted := items.sort(|a, b| {
-    if a < b { ret Ordering.Less }
-    else if a > b { ret Ordering.Greater }
-    else { ret Ordering.Equal }
-})
-```
+Each arm is a `pattern => body` pair separated by commas. Body can be an expression or a block `{ }`.

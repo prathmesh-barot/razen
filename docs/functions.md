@@ -1,103 +1,90 @@
 # Functions
 
-Functions are the core unit of logic in Razen. They are designed to be lean, predictable, and highly optimizable.
-
-## Basic Syntax
-A function is defined using the `func` keyword.
+## Declaration
 
 ```razen
-func add(a: int, b: int) -> int {
+func add(a: i32, b: i32) -> i32 {
     ret a + b
 }
 ```
 
-## Function Variants
+Parameters are `name: Type`. Return type via `-> Type`. Omit `-> void` for void functions:
 
-### Void Functions
-Functions that do not return a value use the `void` type.
 ```razen
-func log(msg: str) -> void {
-    fmt.println(msg)
+func greet() {
+    fmt.println("hi")
 }
 ```
 
-### Const Functions
-`const func` is evaluated at compile time. This is used for generating look-up tables, calculating constants, or performing static checks.
+## Parameters
+
 ```razen
-const func get_version() -> int {
-    ret 1
+func f(x: i32, mut y: T, const z: T, args: ...) -> void
+```
+
+- `mut` prefix — parameter is mutable inside the function body
+- `const` prefix — parameter is a compile-time constant
+- `...` variadic — zero or more trailing arguments
+
+No default parameters. No function overloading.
+
+## Variants
+
+```razen
+pub func exported() -> void         // public visibility
+async func concurrent() -> void     // async (flag only, codegen pending)
+const func comptime_fn() -> i32     // comptime evaluation
+ext func ffi_func(x: i32) -> i32    // external/FFI
+```
+
+## Generic Functions
+
+```razen
+@Generic(T)
+func identity(x: T) -> T {
+    ret x
 }
 ```
 
-### Async Functions
-`async func` denotes a function that can be suspended and resumed, typically used for I/O or concurrency. They return a `Future`.
+Multiple parameters: `@Generic(T, E)`. Generic params are parsed and stored but codegen is pending.
+
+## External Functions (FFI)
+
 ```razen
-async func fetch_api(url: str) -> !str {
-    // Suspension point here
-}
+ext func puts(s: *u8) -> i32
 ```
 
-### External Functions (FFI)
-`ext func` allows Razen to call functions implemented in other languages (usually C).
+`ext func` generates a declaration with C ABI. Body is not provided by Razen code.
 
-`ext struct`, `ext enum`, and `ext union` are supported for implementing behaviours on types from outside their original definition.
+## Examples
 
 ```razen
-ext func printf(fmt: str, ...) -> int
-
-ext struct int ~> Printable {
-    func print_info(p: @Self) -> void {
-        fmt.println("Value: {}", .{p})
-    }
-}
-```
-
-## Generics
-
-### The `@Generic` Attribute
-Razen uses `@Generic(T)` to define a type parameter. Multiple type parameters are supported with `@Generic(T, E)`. The compiler generates specialized versions of the function for each type combination used.
-```razen
-@Generic(T) func identity(val: T) -> T {
-    ret val
+// simple
+func square(x: f32) -> f32 {
+    ret x * x
 }
 
-@Generic(T, E) func pair(first: T, second: E) -> .{T, E} {
-    ret .{first, second}
-}
-```
-
-### Type Parameters
-You can also pass types as explicit arguments to a function.
-```razen
-func wrap(const T: @Type, val: T) -> T {
-    ret val
-}
-```
-
-## Visibility and Modules
-
-### Public Visibility
-The `pub` keyword makes a function accessible to other modules.
-```razen
-pub func calculate_sum(a: int, b: int) -> int {
-    ret a + b
-}
-```
-
-### Module System
-Modules organize code into logical namespaces.
-```razen
-mod Network {
-    pub func connect() -> void { ... }
+// mutable parameter
+func increment(mut x: i32) {
+    x += 1
 }
 
-// Usage
-Network.connect()
-```
+// void return (implicit)
+func log(msg: str) {
+    debug.write(msg)
+}
 
-### Imports
-Use the `use` keyword to bring symbols or modules into the current scope.
-```razen
-use std.fmt
-fmt.println("Hello")
+// generic
+@Generic(T)
+func max(a: T, b: T) -> T {
+    if a > b { ret a }
+    ret b
+}
+
+// variadic
+func sum(args: ...i32) -> i32 {
+    mut total := 0
+    // ...
+    ret total
+}
 ```

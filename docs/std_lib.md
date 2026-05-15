@@ -1,47 +1,35 @@
 # Standard Library
 
-The Razen Standard Library (`std`) is a minimal set of primitives. It avoids heavy runtime dependencies, ensuring that only the code you actually use is compiled into your binary.
+The Razen standard library (`std`) is minimal. No heavy runtime. Only code you use reaches your binary.
 
-## Module Hierarchy
+## Module Listing
 
-### `std.core`
-Always available. Contains the most basic types and compiler intrinsics.
+| Module | Description |
+|--------|-------------|
+| `std.core` | Always in scope. Compiler builtins, primitive types. Never imported. |
+| `std.mem` | Allocators (page, arena, fixed, etc.), raw memory operations, `Layout` |
+| `std.str` | `str` slice utilities (UTF-8, slicing, search) |
+| `std.string` | Heap-allocated `string` type, `StringBuilder` |
+| `std.fmt` | `print`, `println`, `eprint`, `format` |
+| `std.io` | `Reader`/`Writer` behaviours, buffered I/O |
+| `std.fs` | `File`, `Path`, `Dir` operations |
+| `std.os` | `exit`, `clock`, `args`, `env`, process management |
+| `std.vec` | `Vec(T)` growable array |
+| `std.map` | `Map(K,V)` hash map |
+| `std.set` | `Set(T)` hash set |
+| `std.ring` | `Ring(T,N)` fixed-size ring buffer |
+| `std.math` | Numeric operations, float functions, constants |
+| `std.bits` | Bit manipulation utilities |
+| `std.ascii` | ASCII character classification and conversion |
+| `std.unicode` | UTF-8 encode/decode, `char` utilities |
+| `std.parse` | String → number/bool parsing |
+| `std.buf` | `ByteBuf`, little-endian/big-endian read/write |
+| `std.hash` | FNV-1a, SipHash implementations |
+| `std.sync` | Atomics, memory fence |
+| `std.time` | `Duration`, `Instant`, monotonic clock |
+| `std.testing` | Test assertions, test runner |
+| `std.debug` | `assert`, `panic`, `unreachable`, stack trace |
 
-### `std.mem`
-Handles memory allocation and layout.
-- **Allocators**: Various allocation strategies (Page, Arena, etc.).
-- **Layout**: Tools for calculating memory alignment and size.
+## Status
 
-### `std.fmt`
-Text formatting and output.
-- `fmt.print()`: Standard output.
-- `fmt.println()`: Standard output with a trailing newline.
-
-### `std.io`
-Provides the `Reader` and `Writer` behaviours for abstracting input and output streams.
-
-### `std.fs`
-File system interaction.
-- **File**: Open, read, write, and close files.
-- **Path**: Cross-platform path manipulation.
-- **Dir**: Directory traversal and entry listing.
-
-### `std.os`
-Operating system primitives.
-- Process management.
-- Environment variables.
-- System clock and timers.
-
-### `std.vec`, `std.map`, `std.set`
-High-performance collections.
-- `vec[T]`: Dynamic array.
-- `map{K, V}`: Hash map for key-value storage.
-- `set{T}`: Unique collection of elements.
-
-### `std.debug`
-Development tools.
-- `debug.assert(condition)`: Panics if the condition is false.
-- `debug.panic(message)`: Immediately terminates the program with a diagnostic message.
-
-## Implementation Philosophy
-Every part of the `std` library is written to be as transparent as possible. If a function performs a heap allocation, it is clearly indicated in the documentation or by the return type (e.g., returning a `string` instead of a `str`).
+All modules are designed in `design/std_new.md` but not yet implemented. Implementation is Phase 5.
