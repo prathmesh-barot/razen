@@ -2,9 +2,11 @@
 #include "lexer/lexer.h"
 #include "lexer/errors.h"
 #include "ast/errors.h"
+#include "ast/ast_utils.h"
 #include "parser/parser.h"
 #include "dbg/debug.h"
-#include "ast/ast_utils.h"
+#include "semantic/analyzer.h"
+#include "semantic/symbol_table.h"
 #include "samples/sample1.h"
 #include "samples/sample2.h"
 #include "samples/sample3.h"
@@ -41,14 +43,33 @@ static void convertCode(const char* label, const char* source) {
     }
     printAST(ast_nodes);
 
-    std::cout << "\t\tPhase 1 & 2\t\t\tDone\n";
+    // Phase 3 — Semantic
+    std::cout << CREAM << "Phase 3" << RESET << "  ";
+    auto* gs = new Scope();
+    SymbolTable st(gs, gs);
+
+    std::unordered_set<std::string> whitelist = {
+        "std", "self", "true", "false",
+        "print", "println", "eprint", "eprintln",
+        "exit", "assert", "panic", "clock_ms", "clock_ns"
+    };
+
+    Analyzer analyzer(gs, gs, std::move(whitelist), std::move(st));
+    analyzer.analyze(ast_nodes);
+
+    if (analyzer.has_errors) {
+        std::cout << "\n" << RED << "Compilation failed due to semantic errors." << RESET << "\n";
+        freeASTNodes(ast_nodes);
+        return;
+    }
+    std::cout << "\t\tSemantic Analysis\t\t\tDone\n";
 
     freeASTNodes(ast_nodes);
 }
 
 int main() {
-    std::cout << LIGHT_GREEN << "Razen Lang - C++ Frontend Test" << RESET << "\n";
-    std::cout << GREY << "Lexer + AST Builder (Phase 1 & 2)" << RESET << "\n\n";
+    std::cout << LIGHT_GREEN << "Razen Lang - C++ Full Frontend Test" << RESET << "\n";
+    std::cout << GREY << "Lexer + AST Builder + Semantic Analyzer (Phase 1, 2 & 3)" << RESET << "\n\n";
 
     convertCode("RETURN_ZERO", sample1::RETURN_ZERO);
     convertCode("RETURN_ZERO", sample2::RETURN_ZERO);

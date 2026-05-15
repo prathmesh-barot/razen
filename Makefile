@@ -10,7 +10,8 @@ SRCS := $(SRCDIR)/main.cpp \
         $(SRCDIR)/ast/expression.cpp \
         $(SRCDIR)/ast/type_parser.cpp \
         $(SRCDIR)/parser/parser.cpp \
-        $(SRCDIR)/dbg/debug.cpp
+        $(SRCDIR)/dbg/debug.cpp \
+        $(SRCDIR)/semantic/analyzer.cpp
 
 OBJS := $(SRCS:$(SRCDIR)/%.cpp=$(BUILDDIR)/%.o)
 
