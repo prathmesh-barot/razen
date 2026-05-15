@@ -1,0 +1,10 @@
+// match
+
+/// Syntax
+//
+
+match variable {
+    match_case => expr,
+    ...
+    _ => expr,
+}

@@ -263,8 +263,7 @@ static bool shouldSkip(Lexer& lex_data) {
 
     bool is_special = currentChar == '\r' ||
                       currentChar == '\t' ||
-                      currentChar == ' ' ||
-                      currentChar == '\\';
+                      currentChar == ' ';
 
     if (is_special) {
         lex_data.character_index += 1;
@@ -318,6 +317,7 @@ static Token readString(Lexer& lex_data) {
         char c = lex_data.source[lex_data.character_index];
         if (c == '"') {
             lex_data.character_index += 1;
+            lex_data.character_count += text.length() + 2;
             return Token{TokenType::StringValue, text, lex_data.line_count, lex_data.character_count};
         }
         if (c == '\\') {
@@ -335,6 +335,7 @@ static Token readString(Lexer& lex_data) {
 static Token readSeparator(Lexer& lex_data) {
     std::string text(1, lex_data.source[lex_data.character_index]);
     lex_data.character_index += 1;
+    lex_data.character_count += 1;
     return Token{getTokenType(text), text, lex_data.line_count, lex_data.character_count};
 }
 
@@ -357,6 +358,7 @@ static Token readDotOperator(Lexer& lex_data) {
         }
     }
 
+    lex_data.character_count += text.length();
     return Token{getTokenType(text), text, lex_data.line_count, lex_data.character_count};
 }
 
@@ -381,6 +383,7 @@ static Token readChar(Lexer& lex_data) {
         throw LexerError("Unterminated char literal");
     lex_data.character_index += 1;
 
+    lex_data.character_count += char_value.length() + 2;
     return Token{TokenType::CharValue, char_value, lex_data.line_count, lex_data.character_count};
 }
 
@@ -395,9 +398,12 @@ static Token readOperator(Lexer& lex_data) {
 
         bool is_compound = (next == '=') ||
             (first == '-' && next == '>') ||
+            (first == '=' && next == '>') ||
             (first == '~' && next == '>') ||
             (first == '<' && next == '<') ||
-            (first == '>' && next == '>');
+            (first == '>' && next == '>') ||
+            (first == '&' && next == '&') ||
+            (first == '|' && next == '|');
 
         // also handle :: but that's not a Razen operator; handle := (colon already consumed)
         // actually colon is an operator character, so : and = need special handling
@@ -409,6 +415,7 @@ static Token readOperator(Lexer& lex_data) {
         }
     }
 
+    lex_data.character_count += text.length();
     return Token{getTokenType(text), text, lex_data.line_count, lex_data.character_count};
 }
 
@@ -425,6 +432,7 @@ static Token readWord(Lexer& lex_data) {
         }
     }
 
+    lex_data.character_count += text.length();
     return Token{getTokenType(text), text, lex_data.line_count, lex_data.character_count};
 }
 
@@ -468,6 +476,31 @@ static Token readBlockComment(Lexer& lex_data) {
     throw LexerError("Unterminated block comment");
 }
 
+static Token readNumber(Lexer& lex_data) {
+    std::string text;
+    bool has_dot = false;
+
+    while (lex_data.character_index < lex_data.source.size()) {
+        char c = lex_data.source[lex_data.character_index];
+        if (isDigit(c)) {
+            text.push_back(c);
+            lex_data.character_index += 1;
+        } else if (c == '.' && !has_dot &&
+                   lex_data.character_index + 1 < lex_data.source.size() &&
+                   isDigit(lex_data.source[lex_data.character_index + 1])) {
+            has_dot = true;
+            text.push_back(c);
+            lex_data.character_index += 1;
+        } else {
+            break;
+        }
+    }
+
+    lex_data.character_count += text.length();
+    TokenType type = has_dot ? TokenType::DecimalValue : TokenType::IntegerValue;
+    return Token{type, text, lex_data.line_count, lex_data.character_count};
+}
+
 static Token getToken(Lexer& lex_data) {
     if (lex_data.character_index >= lex_data.source.size()) {
         return Token{TokenType::EOF_, "", lex_data.line_count, lex_data.character_count};
@@ -478,6 +511,8 @@ static Token getToken(Lexer& lex_data) {
     if (current_char == '"') return readString(lex_data);
     if (current_char == '\'') return readChar(lex_data);
     if (current_char == '.') return readDotOperator(lex_data);
+
+    if (isDigit(current_char)) return readNumber(lex_data);
 
     // check for comments before operators (since / is an operator character)
     if (current_char == '/') {
@@ -532,6 +567,8 @@ std::vector<Token> parseToTokens(std::string_view source) {
     while (lex_data.character_index < source.size()) {
         processCharacter(lex_data);
     }
+
+    lex_data.token_list.push_back(Token{TokenType::EOF_, "", lex_data.line_count, lex_data.character_count});
 
     std::cout << CYAN << "Done" << RESET << "\n";
     return std::move(lex_data.token_list);

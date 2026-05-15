@@ -102,6 +102,7 @@ static void processGlobalToken(ASTData& d) {
     switch (tok.type) {
         case TokenType::Comment:
         case TokenType::EndComment:
+        case TokenType::EOF_:
             d.advance();
             break;
 
@@ -176,6 +177,12 @@ static void processGlobalToken(ASTData& d) {
                 }
                 case TokenType::Behave: {
                     ASTNode* n = parseBehave(d);
+                    n->is_pub = true;
+                    d.ast_nodes->push_back(n);
+                    break;
+                }
+                case TokenType::Ext: {
+                    ASTNode* n = parseExt(d);
                     n->is_pub = true;
                     d.ast_nodes->push_back(n);
                     break;
@@ -314,6 +321,7 @@ static void processStatement(ASTData& d, ASTNode* body) {
     switch (tok.type) {
         case TokenType::Comment:
         case TokenType::EndComment:
+        case TokenType::EOF_:
             d.advance();
             break;
         case TokenType::RightBrace:
@@ -1126,6 +1134,13 @@ static ASTNode* parseMatch(ASTData& d) {
         } else {
             ASTNode* c_expr = parseBinaryExpr(d, 0);
             case_node->left = c_expr;
+            // struct destructuring pattern: Expr.Binary { left, right, op }
+            if (d.hasMore()) {
+                Token maybe_brace = d.getToken();
+                if (maybe_brace.type == TokenType::LeftBrace) {
+                    case_node->middle = parseBlock(d);
+                }
+            }
         }
 
         Token arr = d.getToken();
@@ -1175,7 +1190,7 @@ static ASTNode* parseStruct(ASTData& d, bool is_pub) {
     d.advance(); // eat 'struct'
 
     Token name_tok = d.getToken();
-    if (name_tok.type != TokenType::Identifier) {
+    if (name_tok.type != TokenType::Identifier && !isVarType(name_tok.type)) {
         d.setError("Expected struct name", name_tok);
         throw AstError("Unexpected type");
     }
@@ -1259,10 +1274,7 @@ static ASTNode* parseStruct(ASTData& d, bool is_pub) {
                     if (comma.type == TokenType::Comma) d.advance();
                 }
             } else if (nxt && nxt->type == TokenType::LeftParen) {
-                // inline method without func keyword
-                const_cast<Token&>((*d.token_list)[d.token_index]) = Token{
-                    TokenType::Func, "func", cur.line, cur.character
-                };
+                d.token_index--;
                 ASTNode* m = parseFuncDecl(d, false);
                 n->children->push_back(m);
             } else {
@@ -1282,7 +1294,7 @@ static ASTNode* parseEnum(ASTData& d, bool is_pub) {
     d.advance();
 
     Token name_tok = d.getToken();
-    if (name_tok.type != TokenType::Identifier) {
+    if (name_tok.type != TokenType::Identifier && !isVarType(name_tok.type)) {
         throw AstError("Unexpected type");
     }
     d.advance();
@@ -1384,7 +1396,7 @@ static ASTNode* parseUnion(ASTData& d, bool is_pub) {
     d.advance();
 
     Token name_tok = d.getToken();
-    if (name_tok.type != TokenType::Identifier) {
+    if (name_tok.type != TokenType::Identifier && !isVarType(name_tok.type)) {
         throw AstError("Unexpected type");
     }
     d.advance();
@@ -1512,6 +1524,9 @@ static ASTNode* parseErrorMap(ASTData& d) {
     d.error_function = "parseErrorMap";
     d.advance();
     Token name_tok = d.getToken();
+    if (name_tok.type != TokenType::Identifier && !isVarType(name_tok.type)) {
+        throw AstError("Unexpected type");
+    }
     d.advance();
     ASTNode* n = createDefaultAstNode();
     n->node_type = ASTNodeType::ErrorDeclaration;
@@ -1686,12 +1701,8 @@ static ASTNode* parseBehave(ASTData& d) {
             req_n->left = type_node;
             n->children->push_back(req_n);
         } else if (cur.type == TokenType::Identifier) {
-            std::optional<Token> nx = d.peekToken(0);
+            std::optional<Token> nx = d.peekToken(1);
             if (nx && nx->type == TokenType::LeftParen) {
-                d.getToken();
-                const_cast<Token&>((*d.token_list)[d.token_index - 1]) = Token{
-                    TokenType::Func, "func", cur.line, cur.character
-                };
                 d.token_index--;
                 ASTNode* m = parseFuncDecl(d, false);
                 n->children->push_back(m);

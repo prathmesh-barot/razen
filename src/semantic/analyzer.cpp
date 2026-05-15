@@ -45,7 +45,16 @@ void Analyzer::analyze(const std::vector<ASTNode*>& ast_nodes) {
 // ── type resolution ─────────────────────────────────────────────────────────
 
 TypeInfo* Analyzer::resolveTypeFromNode(ASTNode* type_node) {
-    if (!type_node || type_node->node_type != ASTNodeType::VarType) return nullptr;
+    if (!type_node) return nullptr;
+    if (type_node->node_type == ASTNodeType::ArrayType) {
+        auto* ti = allocType(TypeCategory::Array);
+        if (type_node->left) ti->elem_type = resolveTypeFromNode(type_node->left);
+        if (type_node->middle && type_node->middle->token) {
+            ti->array_size = std::stoul(type_node->middle->token->value);
+        }
+        return ti;
+    }
+    if (type_node->node_type != ASTNodeType::VarType) return nullptr;
     auto tok = type_node->token;
     if (!tok) return nullptr;
     auto tt = tok->type;
@@ -239,6 +248,21 @@ void Analyzer::declareGlobal(ASTNode* node) {
             sym->symbol_type = SymbolType::Union;
             sym->token = *tok;
             sym->is_pub = node->is_pub;
+            sym->fields = new std::unordered_map<std::string, Symbol*>();
+            if (node->children) {
+                for (auto* child : *node->children) {
+                    if (child->node_type == ASTNodeType::UnionField) {
+                        auto ftok = child->token;
+                        if (!ftok) continue;
+                        auto* fsym = new Symbol();
+                        fsym->name = ftok->value;
+                        fsym->symbol_type = SymbolType::Variable;
+                        fsym->token = *ftok;
+                        if (child->left) fsym->resolved_type = resolveTypeFromNode(child->left);
+                        (*sym->fields)[ftok->value] = fsym;
+                    }
+                }
+            }
             defineSym(sym);
             break;
         }
@@ -247,6 +271,20 @@ void Analyzer::declareGlobal(ASTNode* node) {
             sym->name = name;
             sym->symbol_type = SymbolType::ErrorSet;
             sym->token = *tok;
+            sym->fields = new std::unordered_map<std::string, Symbol*>();
+            if (node->children) {
+                for (auto* child : *node->children) {
+                    if (child->node_type == ASTNodeType::ErrorField) {
+                        auto ftok = child->token;
+                        if (!ftok) continue;
+                        auto* fsym = new Symbol();
+                        fsym->name = ftok->value;
+                        fsym->symbol_type = SymbolType::Variable;
+                        fsym->token = *ftok;
+                        (*sym->fields)[ftok->value] = fsym;
+                    }
+                }
+            }
             defineSym(sym);
             break;
         }
@@ -793,14 +831,13 @@ TypeInfo* Analyzer::anaMemberAccess(ASTNode* node) {
             if (left_type->category == TypeCategory::Struct || left_type->category == TypeCategory::Named) {
                 auto& type_name = left_type->name;
                 if (auto* struct_sym = sym_table.resolveGlobal(type_name)) {
-                    if (struct_sym->fields) {
-                        auto it = struct_sym->fields->find(field_name);
-                        if (it != struct_sym->fields->end())
-                            return it->second->resolved_type;
-                        reportError(*right_node->token, "FieldError",
-                            "Struct '" + type_name + "' has no field '" + field_name + "'.");
-                        return nullptr;
-                    }
+                    if (!struct_sym->fields) return left_type;
+                    auto it = struct_sym->fields->find(field_name);
+                    if (it != struct_sym->fields->end())
+                        return it->second->resolved_type;
+                    reportError(*right_node->token, "FieldError",
+                        "Struct '" + type_name + "' has no field '" + field_name + "'.");
+                    return nullptr;
                 }
             }
 
@@ -902,8 +939,20 @@ bool Analyzer::typesCompatible(const TypeInfo* expected, const TypeInfo* actual,
 
     // same category
     if (expected->category == actual->category) {
-        if (expected->category == TypeCategory::Integer) return true;
-        if (expected->category == TypeCategory::Float) return true;
+        if (expected->category == TypeCategory::Integer) {
+            if (!expected->name.empty() && !actual->name.empty() && expected->name != actual->name) {
+                if (why) *why = "expected '" + expected->name + "' but found '" + actual->name + "'";
+                return false;
+            }
+            return true;
+        }
+        if (expected->category == TypeCategory::Float) {
+            if (!expected->name.empty() && !actual->name.empty() && expected->name != actual->name) {
+                if (why) *why = "expected '" + expected->name + "' but found '" + actual->name + "'";
+                return false;
+            }
+            return true;
+        }
 
         // pointer compatibility
         if (expected->category == TypeCategory::Pointer) {

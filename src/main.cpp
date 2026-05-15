@@ -51,7 +51,7 @@ static void convertCode(const char* label, const char* source) {
     SymbolTable st(gs, gs);
 
     std::unordered_set<std::string> whitelist = {
-        "std", "self", "true", "false",
+        "std", "self", "true", "false", "null",
         "print", "println", "eprint", "eprintln",
         "exit", "assert", "panic", "clock_ms", "clock_ns"
     };
