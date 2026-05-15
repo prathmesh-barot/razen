@@ -136,20 +136,39 @@ ASTNode* parsePrimary(ASTData& d) {
             ASTNode* n = createDefaultAstNode();
             n->node_type = ASTNodeType::Annotation;
             n->token = name_tok;
+            n->children = createChildList();
 
             // @Name(args)
             std::optional<Token> next = d.peekToken(0);
             if (next && next->type == TokenType::LeftParen) {
                 d.advance();
-                size_t depth = 1;
-                size_t guard2 = 0;
-                while (d.hasMore() && depth > 0) {
-                    guard2++;
-                    if (guard2 > 1000) break;
-                    Token t = d.getToken();
-                    d.advance();
-                    if (t.type == TokenType::LeftParen) depth++;
-                    if (t.type == TokenType::RightParen) depth--;
+                // parse args for @Generic(T), @Generic(T,E), etc.
+                while (d.hasMore()) {
+                    Token cur = d.getToken();
+                    if (cur.type == TokenType::RightParen) {
+                        d.advance();
+                        break;
+                    }
+                    if (cur.type == TokenType::Comma) {
+                        d.advance();
+                        continue;
+                    }
+                    // parse identifier as generic arg
+                    if (cur.type == TokenType::Identifier) {
+                        ASTNode* arg_n = createDefaultAstNode();
+                        arg_n->node_type = ASTNodeType::Identifier;
+                        arg_n->token = cur;
+                        n->children->push_back(arg_n);
+                        d.advance();
+                    } else if (isVarType(cur.type)) {
+                        ASTNode* arg_n = createDefaultAstNode();
+                        arg_n->node_type = ASTNodeType::VarType;
+                        arg_n->token = cur;
+                        n->children->push_back(arg_n);
+                        d.advance();
+                    } else {
+                        d.advance();
+                    }
                 }
                 // check if @Name() is followed by a func call
                 std::optional<Token> after = d.peekToken(0);
@@ -207,6 +226,18 @@ ASTNode* parsePrimary(ASTData& d) {
 
         // &x address-of
         case TokenType::And: {
+            d.advance();
+            ASTNode* operand = parsePrimary(d);
+            if (!operand) return nullptr;
+            ASTNode* n = createDefaultAstNode();
+            n->node_type = ASTNodeType::UnaryExpression;
+            n->token = tok;
+            n->left = operand;
+            return n;
+        }
+
+        // ~x bitwise not
+        case TokenType::Tilde: {
             d.advance();
             ASTNode* operand = parsePrimary(d);
             if (!operand) return nullptr;
@@ -369,6 +400,8 @@ ASTNode* parseBinaryExpr(ASTData& d, size_t min_prec) {
         ASTNode* bin = createDefaultAstNode();
         if (op_tok.type == TokenType::Dot) {
             bin->node_type = ASTNodeType::MemberAccess;
+        } else if (op_tok.type == TokenType::DotDot || op_tok.type == TokenType::DotDotEquals) {
+            bin->node_type = ASTNodeType::RangeExpression;
         } else {
             bin->node_type = ASTNodeType::BinaryExpression;
         }

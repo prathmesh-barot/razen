@@ -168,15 +168,21 @@ const char* nodeTypeName(ASTNodeType nt) {
         case ASTNodeType::Parameters: return "Parameters";
         case ASTNodeType::VarType: return "VarType";
         case ASTNodeType::ReturnType: return "ReturnType";
+        case ASTNodeType::GenericParams: return "GenericParams";
         case ASTNodeType::BinaryExpression: return "BinaryExpression";
         case ASTNodeType::UnaryExpression: return "UnaryExpression";
+        case ASTNodeType::RangeExpression: return "RangeExpression";
         case ASTNodeType::MemberAccess: return "MemberAccess";
         case ASTNodeType::Identifier: return "Identifier";
         case ASTNodeType::BuiltinExpression: return "BuiltinExpression";
         case ASTNodeType::ReturnStatement: return "ReturnStatement";
+        case ASTNodeType::BreakStatement: return "BreakStatement";
+        case ASTNodeType::SkipStatement: return "SkipStatement";
+        case ASTNodeType::TryBlock: return "TryBlock";
         case ASTNodeType::Assignment: return "Assignment";
         case ASTNodeType::Block: return "Block";
         case ASTNodeType::IfStatement: return "IfStatement";
+        case ASTNodeType::ElseIfStatement: return "ElseIfStatement";
         case ASTNodeType::IfBody: return "IfBody";
         case ASTNodeType::ElseBody: return "ElseBody";
         case ASTNodeType::LoopStatement: return "LoopStatement";
@@ -209,6 +215,8 @@ static const char* nodeColour(ASTNodeType nt) {
         case ASTNodeType::ModuleDeclaration:
         case ASTNodeType::UseDeclaration: return GREEN_;
         case ASTNodeType::ReturnStatement: return CYAN_;
+        case ASTNodeType::BreakStatement:
+        case ASTNodeType::SkipStatement: return CYAN_;
         case ASTNodeType::IfStatement:
         case ASTNodeType::LoopStatement:
         case ASTNodeType::MatchStatement:
@@ -229,6 +237,10 @@ static const char* nodeColour(ASTNodeType nt) {
         case ASTNodeType::UnionField:
         case ASTNodeType::ErrorField: return PEACH_;
         case ASTNodeType::FunctionCall: return BLUE_;
+        case ASTNodeType::ElseIfStatement:
+        case ASTNodeType::TryBlock: return MAGENTA_;
+        case ASTNodeType::RangeExpression: return YELLOW_;
+        case ASTNodeType::GenericParams: return CREAM_;
         case ASTNodeType::Parameter:
         case ASTNodeType::Parameters: return CREAM_;
         case ASTNodeType::Assignment: return YELLOW_;

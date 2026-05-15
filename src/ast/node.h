@@ -45,6 +45,7 @@ enum class ASTNodeType {
     // types
     VarType,
     ReturnType,
+    GenericParams,
 
     // expressions
     BinaryExpression,
@@ -52,16 +53,21 @@ enum class ASTNodeType {
     MemberAccess,
     Identifier,
     BuiltinExpression,
+    RangeExpression,
 
     // statements
     ReturnStatement,
     Assignment,
+    BreakStatement,
+    SkipStatement,
+    TryBlock,
 
     // block
     Block,
 
     // control flow
     IfStatement,
+    ElseIfStatement,
     IfBody,
     ElseBody,
     LoopStatement,

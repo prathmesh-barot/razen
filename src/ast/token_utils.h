@@ -99,6 +99,8 @@ inline bool isBinaryOperator(TokenType tt) {
         case TokenType::ShiftLeft: case TokenType::ShiftRight:
         case TokenType::Catch:
         case TokenType::Dot:
+        case TokenType::DotDot:
+        case TokenType::DotDotEquals:
             return true;
         default:
             return false;
@@ -135,6 +137,8 @@ inline size_t getPrecedence(TokenType tt) {
         case TokenType::Star:
         case TokenType::Slash:
         case TokenType::Percent:    return 10;
+        case TokenType::DotDot:
+        case TokenType::DotDotEquals: return 11;
         case TokenType::Dot:        return 12;
         default:                    return 0;
     }

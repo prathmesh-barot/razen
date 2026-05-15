@@ -81,7 +81,7 @@
 - ✓ Type nodes: VarType, PointerType (*T), ArrayType ([T], [T;N]), OptionalType (?T), FailableType (!T), ErrorUnionType (Error!T)
 - ✓ Declaration nodes: FunctionDeclaration, VarDeclaration, ConstDeclaration, StructDeclaration, EnumDeclaration, UnionDeclaration, ErrorMapDeclaration, TypeAliasDeclaration, ModuleDeclaration, UseDeclaration, BehaviourDeclaration, ExtDeclaration
 - ✓ Statement nodes: ReturnStatement, IfStatement, LoopStatement, MatchStatement, TryStatement (TryExpression), CatchBlock (CatchExpression), DeferStatement, Assignment, Block
-- ◐ BreakStatement / SkipStatement — parsed but mapped to ReturnStatement node with token value "break"/"skip"
+- ✓ BreakStatement / SkipStatement — dedicated AST nodes with correct loop-scope validation
 - ✓ Expression nodes: BinaryExpression, UnaryExpression, FunctionCall, MemberAccess, ArrayLiteral, Argument, Parameters, Parameter
 - ✓ Structural nodes: ReturnType, IfBody, ElseBody, LoopBody, MatchBody
 - ✓ Annotation node (for `@` attributes)
@@ -89,44 +89,44 @@
 
 ### Declaration Parsing
 - ✓ `func name(params) -> ret_type { body }` — full function parsing
-- ✓ `pub func` / `async func` / `const func` / `ext func` variants
-- ☐ Generic parameters: `@Generic(T)`, `@Generic(T, E)` — `@` parsed as annotation, no generic deduction
+- ✓ `pub func` / `async func` / `const func` / `ext func` / `ext struct` / `ext enum` / `ext union` variants
+- ✓ Generic parameters: `@Generic(T)`, `@Generic(T, E)` — parsed with GenericParams node, stored on declaration
 - ✓ Parameter parsing with `mut`/`const` prefix, variadic `...`
-- ✓ `struct Name { fields... }` with methods, `~>` trait impls, field defaults
-- ✓ `enum Name: backing_type { variants... }` with explicit values, methods, `~>`
+- ✓ `struct Name { fields... }` with methods, `~>` trait impls, `~>` rename syntax, field defaults
+- ✓ `enum Name: backing_type { variants... }` with explicit values, methods, `~>` (traits in children, consistent with struct/union)
 - ✓ `union Name { variants... }` — tuple-style, struct-variant
 - ✓ `error Name { variants... }` — error set declaration
-- ✓ `behave Name { needs..., func... }` — behaviour/trait declaration
+- ✓ `behave Name { needs..., func... }` — behaviour/trait declaration, with `~>` inheritance
 - ✓ `const Name: type = expr` — compile-time constants
-- ✓ `type Name = Type` — type aliases
+- ✓ `type Name = Type` — type aliases (full type parsing via parseTypeNodeWrapper)
 - ✓ `mod Name;` — module declarations
 - ✓ `use dotted.path;` — import statements
-- ✓ `pub` visibility flag on declarations
+- ✓ `pub` visibility flag on all declarations (func, struct, enum, union, type, behave, const, mod, use)
 
 ### Statement Parsing
 - ✓ Variable declarations: `name: type = expr`, `name := expr`, `mut` variant
 - ✓ Assignment: `name = expr`, name `+=`/`-=`/`*=`/`/=`/`%=` expr
 - ✓ `ret expr` / `ret` (void return)
-- ✓ `if cond { ... } else { ... }`
+- ✓ `if cond { ... } else { ... }` — including `else if` chaining (ElseIfStatement node)
 - ✓ `loop { ... }` — infinite loop
 - ✓ `loop cond { ... }` — conditional loop (parsed)
 - ✓ `loop expr |item| { ... }` — iterator loop (parsed)
 - ✓ `break`, `skip`
 - ✓ `defer { ... }`, `defer stmt`
 - ✓ `match expr { pat => body, ... }` with literal/enum/destructure/wildcard patterns
-- ✓ `try expr`, `try expr catch |err| { ... }`
+- ✓ `try expr`, `try expr catch |err| { ... }`, `try { ... } catch (err) { ... }` (block variant)
 - ✓ `@as(Type, expr)` and other `@` builtins (parsed as annotation + function call)
 
 ### Expression Parsing
 - ✓ Full precedence-climbing expression parser (12 precedence levels)
 - ✓ All binary operators with correct associativity
-- ✓ Unary: `-`, `!`, `&` (address-of), `*` (dereference via `ptr.*`)
+- ✓ Unary: `-`, `!`, `~` (bitwise not), `&` (address-of), `*` (dereference via `ptr.*`)
 - ✓ Pointer dereference: `ptr.*` (postfix)
 - ✓ Member access: `a.b.c`
 - ✓ Function calls: `f(args)` with argument lists
 - ✓ Array literals: `[1, 2, 3]`
 - ✓ Tuple literals: `.{a, b, c}`
-- ◐ Range expressions: `..`, `..=`, `...` tokenized but not parsed as dedicated range expression nodes
+- ✓ Range expressions: `..`, `..=`, `...` parsed as dedicated RangeExpression nodes with precedence 11
 - ✓ Capture blocks: `|e| expr`
 - ✓ Parenthesized grouping
 - ✓ Type annotations in expression context
@@ -267,7 +267,7 @@
 |-----------|-------------|------------------|--------|
 | M0 | C++ pipeline skeleton | Makefile, lexer, parser, semantic stubs | ✓ Complete |
 | M1 | Working lexer | Full tokenization of all Razen constructs | ✓ Complete |
-| M2 | Full parser + AST | All declarations, statements, expressions | ✓ Complete |
+| M2 | Full parser + AST | All declarations, statements, expressions, generics, ranges, else-if, block try, ext struct | ✓ Complete |
 | M3 | Semantic analysis | Type checking, scope, validation | ✓ Complete (basic) |
 | M4 | Struct codegen | Struct types, field access, methods | ☐ Not started |
 | M5 | Enum + Match | Enumerations compile, match dispatches | ☐ Not started |

@@ -117,11 +117,22 @@ static void processGlobalToken(ASTData& d) {
                 processGlobalToken(d);
                 if (d.ast_nodes->size() > sub_node) {
                     ASTNode* parsed_n = (*d.ast_nodes)[d.ast_nodes->size() - 1];
-                    if (parsed_n->node_type == ASTNodeType::BehaveDeclaration ||
-                        parsed_n->node_type == ASTNodeType::StructDeclaration ||
-                        parsed_n->node_type == ASTNodeType::FunctionDeclaration)
-                    {
-                        parsed_n->middle = annotation;
+                    // store annotation in children (don't overwrite middle—it holds params for func)
+                    appendChild(parsed_n, annotation);
+                    // if this is @Generic(T), extract generic param names
+                    if (annotation->token && annotation->token->value == "Generic" && annotation->children) {
+                        ASTNode* gp = createDefaultAstNode();
+                        gp->node_type = ASTNodeType::GenericParams;
+                        gp->children = createChildList();
+                        for (auto* arg : *annotation->children) {
+                            if (arg->node_type == ASTNodeType::Identifier) {
+                                gp->children->push_back(arg);
+                            }
+                        }
+                        if (gp->children->size() > 0) {
+                            // store after the annotation
+                            appendChild(parsed_n, gp);
+                        }
                     }
                 }
             }
@@ -161,6 +172,43 @@ static void processGlobalToken(ASTData& d) {
                 }
                 case TokenType::Type: {
                     ASTNode* n = parseTypeAlias(d, true);
+                    d.ast_nodes->push_back(n);
+                    break;
+                }
+                case TokenType::Behave: {
+                    ASTNode* n = parseBehave(d);
+                    n->is_pub = true;
+                    d.ast_nodes->push_back(n);
+                    break;
+                }
+                case TokenType::Const: {
+                    d.advance();
+                    // distinguish const func from const var
+                    if (d.hasMore()) {
+                        Token ct = d.getToken();
+                        if (ct.type == TokenType::Func) {
+                            ASTNode* n = parseFuncDecl(d, true);
+                            n->is_const = true;
+                            d.ast_nodes->push_back(n);
+                        } else {
+                            ASTNode* n = parseVarDecl(d, false);
+                            n->node_type = ASTNodeType::ConstDeclaration;
+                            n->is_const = true;
+                            n->is_pub = true;
+                            d.ast_nodes->push_back(n);
+                        }
+                    }
+                    break;
+                }
+                case TokenType::Mod: {
+                    ASTNode* n = parseModule(d);
+                    n->is_pub = true;
+                    d.ast_nodes->push_back(n);
+                    break;
+                }
+                case TokenType::Use: {
+                    ASTNode* n = parseUse(d);
+                    n->is_pub = true;
                     d.ast_nodes->push_back(n);
                     break;
                 }
@@ -299,7 +347,7 @@ static void processStatement(ASTData& d, ASTNode* body) {
         }
         case TokenType::Break: {
             ASTNode* n = createDefaultAstNode();
-            n->node_type = ASTNodeType::ReturnStatement;
+            n->node_type = ASTNodeType::BreakStatement;
             n->token = tok;
             d.advance();
             consumeSemi(d);
@@ -308,7 +356,7 @@ static void processStatement(ASTData& d, ASTNode* body) {
         }
         case TokenType::Skip: {
             ASTNode* n = createDefaultAstNode();
-            n->node_type = ASTNodeType::ReturnStatement;
+            n->node_type = ASTNodeType::SkipStatement;
             n->token = tok;
             d.advance();
             consumeSemi(d);
@@ -557,6 +605,23 @@ static ASTNode* parseFuncDecl(ASTData& d, bool is_pub) {
     }
     d.advance();
 
+    // check for ~> rename: func new_name ~> Trait.original(args) -> ret { body }
+    std::optional<Token> tilde_check = d.peekToken(0);
+    if (tilde_check && tilde_check->type == TokenType::TildeArrow) {
+        d.advance(); // consume ~>
+        // read the trait.method identifier chain
+        while (d.hasMore()) {
+            Token pt = d.getToken();
+            if (pt.type == TokenType::Identifier) {
+                d.advance();
+            } else if (pt.type == TokenType::Dot) {
+                d.advance();
+            } else {
+                break;
+            }
+        }
+    }
+
     Token lp = d.getToken();
     if (lp.type != TokenType::LeftParen) {
         d.setError("Expected '(' after function name", lp);
@@ -795,9 +860,19 @@ static ASTNode* parseIf(ASTData& d) {
         Token maybe_else = d.getToken();
         if (maybe_else.type == TokenType::Else) {
             d.advance();
-            ASTNode* else_body = parseBlock(d);
-            else_body->node_type = ASTNodeType::ElseBody;
-            n->right = else_body;
+            // check for else if
+            if (d.hasMore()) {
+                std::optional<Token> peek = d.peekToken(0);
+                if (peek && peek->type == TokenType::If) {
+                    ASTNode* else_if = parseIf(d);
+                    else_if->node_type = ASTNodeType::ElseIfStatement;
+                    n->right = else_if;
+                } else {
+                    ASTNode* else_body = parseBlock(d);
+                    else_body->node_type = ASTNodeType::ElseBody;
+                    n->right = else_body;
+                }
+            }
         }
     }
 
@@ -889,6 +964,56 @@ static ASTNode* parseTryStatement(ASTData& d) {
     Token try_tok = d.getToken();
     d.advance();
 
+    // check for block try: try { ... } catch (err) { ... }
+    std::optional<Token> peek = d.peekToken(0);
+    if (peek && peek->type == TokenType::LeftBrace) {
+        ASTNode* try_body = parseBlock(d);
+
+        ASTNode* try_node = createDefaultAstNode();
+        try_node->node_type = ASTNodeType::TryBlock;
+        try_node->token = try_tok;
+        try_node->left = try_body;
+
+        if (d.hasMore()) {
+            Token maybe_catch = d.getToken();
+            if (maybe_catch.type == TokenType::Catch) {
+                d.advance();
+
+                // optional (err) or |err| capture
+                if (d.hasMore()) {
+                    Token open = d.getToken();
+                    if (open.type == TokenType::LeftParen || open.type == TokenType::Or) {
+                        d.advance();
+                        Token e_tok = d.getToken();
+                        if (e_tok.type == TokenType::Identifier) {
+                            d.advance();
+                        }
+                        Token close = d.getToken();
+                        if (close.type == TokenType::RightParen || close.type == TokenType::Or) {
+                            d.advance();
+                        }
+                    }
+                }
+
+                ASTNode* catch_node = createDefaultAstNode();
+                catch_node->node_type = ASTNodeType::CatchExpression;
+                catch_node->token = maybe_catch;
+
+                if (d.hasMore()) {
+                    Token pt = d.getToken();
+                    if (pt.type == TokenType::LeftBrace) {
+                        catch_node->left = parseBlock(d);
+                    } else {
+                        catch_node->left = parseBinaryExpr(d, 0);
+                    }
+                }
+                try_node->right = catch_node;
+            }
+        }
+        return try_node;
+    }
+
+    // expression try: try expr catch |err| { ... }
     ASTNode* expr = parseBinaryExpr(d, 0);
 
     ASTNode* try_node = createDefaultAstNode();
@@ -994,6 +1119,11 @@ static ASTNode* parseMatch(ASTData& d) {
         if (cur.type == TokenType::Else) {
             case_node->token = cur;
             d.advance();
+            // consume => arrow for else case too
+            std::optional<Token> peek_arr = d.peekToken(0);
+            if (peek_arr && (peek_arr->type == TokenType::Arrow || peek_arr->value == "=>")) {
+                d.advance();
+            }
         } else {
             ASTNode* c_expr = parseBinaryExpr(d, 0);
             case_node->left = c_expr;
@@ -1178,23 +1308,20 @@ static ASTNode* parseEnum(ASTData& d, bool is_pub) {
         Token maybe_tilde = d.getToken();
         if (maybe_tilde.type == TokenType::TildeArrow) {
             d.advance();
-            Token trait_name = d.getToken();
-            if (trait_name.type == TokenType::Identifier) {
-                ASTNode* trait_node = createDefaultAstNode();
-                trait_node->node_type = ASTNodeType::Identifier;
-                trait_node->token = trait_name;
-                n->left = trait_node;
-                d.advance();
-            } else {
-                d.setError("Expected trait name after ~>", trait_name);
-                throw AstError("Unexpected type");
-            }
             while (d.hasMore()) {
+                Token trait_name = d.getToken();
+                if (trait_name.type == TokenType::Identifier) {
+                    ASTNode* trait_node = createDefaultAstNode();
+                    trait_node->node_type = ASTNodeType::Identifier;
+                    trait_node->token = trait_name;
+                    n->children->push_back(trait_node);
+                    d.advance();
+                } else {
+                    break;
+                }
                 Token comma = d.getToken();
                 if (comma.type == TokenType::Comma) {
                     d.advance();
-                    Token nxt_trait = d.getToken();
-                    if (nxt_trait.type == TokenType::Identifier) d.advance();
                 } else {
                     break;
                 }
@@ -1428,12 +1555,7 @@ static ASTNode* parseTypeAlias(ASTData& d, bool is_pub) {
     d.advance();
     Token eq = d.getToken();
     if (eq.type == TokenType::Equals) d.advance();
-    Token tp = d.getToken();
-    d.advance();
-
-    ASTNode* tn = createDefaultAstNode();
-    tn->node_type = ASTNodeType::VarType;
-    tn->token = tp;
+    ASTNode* tn = parseTypeNodeWrapper(d);
 
     ASTNode* n = createDefaultAstNode();
     n->node_type = ASTNodeType::TypeAliasDeclaration;
@@ -1509,6 +1631,32 @@ static ASTNode* parseBehave(ASTData& d) {
     n->token = name_tok;
     n->children = createChildList();
 
+    // optional ~> ParentTrait (behaviour inheritance)
+    if (d.hasMore()) {
+        Token maybe_tilde = d.getToken();
+        if (maybe_tilde.type == TokenType::TildeArrow) {
+            d.advance();
+            while (d.hasMore()) {
+                Token trait_name = d.getToken();
+                if (trait_name.type == TokenType::Identifier) {
+                    ASTNode* inherit = createDefaultAstNode();
+                    inherit->node_type = ASTNodeType::Identifier;
+                    inherit->token = trait_name;
+                    n->children->push_back(inherit);
+                    d.advance();
+                } else {
+                    break;
+                }
+                Token comma = d.getToken();
+                if (comma.type == TokenType::Comma) {
+                    d.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
     Token lb = d.getToken();
     if (lb.type == TokenType::LeftBrace) d.advance();
 
@@ -1563,13 +1711,28 @@ static ASTNode* parseBehave(ASTData& d) {
 static ASTNode* parseExt(ASTData& d) {
     d.error_function = "parseExt";
     d.advance();
-    Token fn_tok = d.getToken();
-    if (fn_tok.type == TokenType::Func) {
+    Token ext_tok = d.getToken();
+    if (ext_tok.type == TokenType::Func) {
         ASTNode* m = parseFuncDecl(d, false);
         m->node_type = ASTNodeType::ExtDeclaration;
         return m;
     }
-    d.setError("Expected func after ext", fn_tok);
+    if (ext_tok.type == TokenType::Struct) {
+        ASTNode* m = parseStruct(d, false);
+        m->node_type = ASTNodeType::ExtDeclaration;
+        return m;
+    }
+    if (ext_tok.type == TokenType::Enum) {
+        ASTNode* m = parseEnum(d, false);
+        m->node_type = ASTNodeType::ExtDeclaration;
+        return m;
+    }
+    if (ext_tok.type == TokenType::Union) {
+        ASTNode* m = parseUnion(d, false);
+        m->node_type = ASTNodeType::ExtDeclaration;
+        return m;
+    }
+    d.setError("Expected func/struct/enum/union after ext", ext_tok);
     throw AstError("Unexpected type");
 }
 

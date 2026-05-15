@@ -13,6 +13,7 @@
 #include "samples/sample4.h"
 #include "samples/sample5.h"
 #include "samples/comments.h"
+#include "samples/stage2.h"
 #include "samples/semantic_errors.h"
 
 using namespace razen;
@@ -125,4 +126,18 @@ int main() {
     convertCode("CHAR_ESCAPES", sample_comments::CHAR_ESCAPES);
     convertCode("MIXED_FEATURES", sample_comments::MIXED_FEATURES);
     convertCode("EMPTY_BLOCK", sample_comments::EMPTY_BLOCK);
+
+    // Stage 2 features
+    convertCode("BREAK_SKIP", sample_stage2::BREAK_SKIP);
+    convertCode("ELSE_IF", sample_stage2::ELSE_IF);
+    convertCode("RANGE_EXPR", sample_stage2::RANGE_EXPR);
+    convertCode("TRY_BLOCK", sample_stage2::TRY_BLOCK);
+    convertCode("GENERIC_FUNC", sample_stage2::GENERIC_FUNC);
+    convertCode("GENERIC_STRUCT", sample_stage2::GENERIC_STRUCT);
+    convertCode("PUB_DECLARATIONS", sample_stage2::PUB_DECLARATIONS);
+    convertCode("BEHAVE_RENAME", sample_stage2::BEHAVE_RENAME);
+    convertCode("BITWISE_NOT", sample_stage2::BITWISE_NOT);
+    convertCode("TYPE_ALIAS_COMPLEX", sample_stage2::TYPE_ALIAS_COMPLEX);
+    convertCode("EXT_STRUCT", sample_stage2::EXT_STRUCT);
+    convertCode("VOID_NO_RET", sample_stage2::VOID_NO_RET);
 }

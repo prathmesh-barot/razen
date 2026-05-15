@@ -270,20 +270,26 @@ TypeInfo* Analyzer::anaNode(ASTNode* node) {
             return anaVarDecl(node);
         case ASTNodeType::Assignment:
             return anaAssignment(node);
-        case ASTNodeType::ReturnStatement: {
-            auto tok = node->token;
-            if (!tok) return nullptr;
-            if (tok->value == "break") {
-                if (!sym_table.isInLoop())
-                    reportError(*tok, "'break' outside of a loop is not allowed.");
-                return nullptr;
-            }
-            if (tok->value == "skip") {
-                if (!sym_table.isInLoop())
-                    reportError(*tok, "'skip' outside of a loop is not allowed.");
-                return nullptr;
-            }
+        case ASTNodeType::ReturnStatement:
             return anaReturn(node);
+        case ASTNodeType::BreakStatement: {
+            auto tok = node->token;
+            if (tok && !sym_table.isInLoop())
+                reportError(*tok, "'break' outside of a loop is not allowed.");
+            return nullptr;
+        }
+        case ASTNodeType::SkipStatement: {
+            auto tok = node->token;
+            if (tok && !sym_table.isInLoop())
+                reportError(*tok, "'skip' outside of a loop is not allowed.");
+            return nullptr;
+        }
+        case ASTNodeType::TryBlock: {
+            if (node->left) anaNode(node->left);
+            if (node->right && node->right->node_type == ASTNodeType::CatchExpression) {
+                if (node->right->left) anaNode(node->right->left);
+            }
+            return nullptr;
         }
         case ASTNodeType::IfStatement:
             return anaIf(node);
