@@ -247,25 +247,14 @@ TokenType getTokenType(std::string_view s) {
 
 // ── internal lexer functions ───────────────────────────────────────────────
 
-// skip whitespace and handle comment closing
+// skip whitespace
 static bool shouldSkip(Lexer& lex_data) {
     lex_data.character_count += 1;
-    if (lex_data.last_token.has_value()) {
-        if (lex_data.last_token->type == TokenType::Comment) {
-            lex_data.was_comment = true;
-        }
-    }
 
     if (lex_data.character_index >= lex_data.source.size()) return false;
     char currentChar = lex_data.source[lex_data.character_index];
 
     if (currentChar == '\n') {
-        if (lex_data.was_comment) {
-            lex_data.token_list.push_back(Token{
-                TokenType::EndComment, "", lex_data.line_count, lex_data.character_count
-            });
-            lex_data.was_comment = false;
-        }
         lex_data.line_count += 1;
         lex_data.character_count = 0;
         lex_data.character_index += 1;
@@ -284,11 +273,46 @@ static bool shouldSkip(Lexer& lex_data) {
     return false;
 }
 
+// read a single escape sequence (character_index points to char after \)
+static char readEscapeChar(Lexer& lex_data) {
+    if (lex_data.character_index >= lex_data.source.size())
+        throw LexerError("Unterminated escape sequence");
+
+    char c = lex_data.source[lex_data.character_index];
+    lex_data.character_index += 1;
+
+    switch (c) {
+        case 'n':  return '\n';
+        case 't':  return '\t';
+        case 'r':  return '\r';
+        case '0':  return '\0';
+        case '\\': return '\\';
+        case '"':  return '"';
+        case '\'': return '\'';
+        case 'x': {
+            if (lex_data.character_index + 1 >= lex_data.source.size())
+                throw LexerError("Incomplete hex escape sequence");
+            char hex[3] = {lex_data.source[lex_data.character_index],
+                           lex_data.source[lex_data.character_index + 1], 0};
+            char* end = nullptr;
+            long val = strtol(hex, &end, 16);
+            if (end != hex + 2)
+                throw LexerError("Invalid hex escape sequence");
+            lex_data.character_index += 2;
+            return static_cast<char>(val);
+        }
+        default:
+        {
+            std::string msg = "Unknown escape sequence: \\";
+            msg += c;
+            throw LexerError(msg);
+        }
+    }
+}
+
 static Token readString(Lexer& lex_data) {
     std::string text;
-
-    // skip past opening "
-    lex_data.character_index += 1;
+    lex_data.character_index += 1; // skip past opening "
 
     while (lex_data.character_index < lex_data.source.size()) {
         char c = lex_data.source[lex_data.character_index];
@@ -296,8 +320,13 @@ static Token readString(Lexer& lex_data) {
             lex_data.character_index += 1;
             return Token{TokenType::StringValue, text, lex_data.line_count, lex_data.character_count};
         }
-        text.push_back(c);
-        lex_data.character_index += 1;
+        if (c == '\\') {
+            lex_data.character_index += 1; // skip backslash
+            text += readEscapeChar(lex_data);
+        } else {
+            text.push_back(c);
+            lex_data.character_index += 1;
+        }
     }
 
     throw LexerError("Unterminated string literal");
@@ -333,20 +362,23 @@ static Token readDotOperator(Lexer& lex_data) {
 
 static Token readChar(Lexer& lex_data) {
     lex_data.character_index += 1; // skip opening '
-    if (lex_data.character_index >= lex_data.source.size()) {
+    if (lex_data.character_index >= lex_data.source.size())
         throw LexerError("Unexpected end of input in char literal");
+
+    std::string char_value;
+    if (lex_data.source[lex_data.character_index] == '\\') {
+        lex_data.character_index += 1; // skip backslash
+        char_value += readEscapeChar(lex_data);
+    } else {
+        char_value = lex_data.source[lex_data.character_index];
+        lex_data.character_index += 1;
     }
 
-    std::string char_value(1, lex_data.source[lex_data.character_index]);
-    lex_data.character_index += 1;
-
-    if (lex_data.character_index >= lex_data.source.size()) {
+    if (lex_data.character_index >= lex_data.source.size())
         throw LexerError("Unexpected end of input in char literal");
-    }
 
-    if (lex_data.source[lex_data.character_index] != '\'') {
+    if (lex_data.source[lex_data.character_index] != '\'')
         throw LexerError("Unterminated char literal");
-    }
     lex_data.character_index += 1;
 
     return Token{TokenType::CharValue, char_value, lex_data.line_count, lex_data.character_count};
@@ -396,6 +428,46 @@ static Token readWord(Lexer& lex_data) {
     return Token{getTokenType(text), text, lex_data.line_count, lex_data.character_count};
 }
 
+static Token readSingleLineComment(Lexer& lex_data) {
+    size_t start_line = lex_data.line_count;
+    size_t start_char = lex_data.character_count;
+    lex_data.character_index += 2; // skip //
+
+    std::string text;
+    while (lex_data.character_index < lex_data.source.size()) {
+        char c = lex_data.source[lex_data.character_index];
+        if (c == '\n') break; // comment ends at newline, don't consume it
+        text.push_back(c);
+        lex_data.character_index += 1;
+    }
+
+    return Token{TokenType::Comment, text, start_line, start_char};
+}
+
+static Token readBlockComment(Lexer& lex_data) {
+    size_t start_line = lex_data.line_count;
+    size_t start_char = lex_data.character_count;
+    lex_data.character_index += 2; // skip /*
+
+    std::string text;
+    while (lex_data.character_index < lex_data.source.size()) {
+        char c = lex_data.source[lex_data.character_index];
+        if (c == '*' && lex_data.character_index + 1 < lex_data.source.size() &&
+            lex_data.source[lex_data.character_index + 1] == '/') {
+            lex_data.character_index += 2; // skip */
+            return Token{TokenType::Comment, text, start_line, start_char};
+        }
+        if (c == '\n') {
+            lex_data.line_count += 1;
+            lex_data.character_count = 0;
+        }
+        text.push_back(c);
+        lex_data.character_index += 1;
+    }
+
+    throw LexerError("Unterminated block comment");
+}
+
 static Token getToken(Lexer& lex_data) {
     if (lex_data.character_index >= lex_data.source.size()) {
         return Token{TokenType::EOF_, "", lex_data.line_count, lex_data.character_count};
@@ -406,10 +478,29 @@ static Token getToken(Lexer& lex_data) {
     if (current_char == '"') return readString(lex_data);
     if (current_char == '\'') return readChar(lex_data);
     if (current_char == '.') return readDotOperator(lex_data);
+
+    // check for comments before operators (since / is an operator character)
+    if (current_char == '/') {
+        if (lex_data.character_index + 1 < lex_data.source.size()) {
+            char next = lex_data.source[lex_data.character_index + 1];
+            if (next == '/') return readSingleLineComment(lex_data);
+            if (next == '*') return readBlockComment(lex_data);
+        }
+    }
+
     if (isOperator(current_char)) return readOperator(lex_data);
     if (isSeparator(current_char)) return readSeparator(lex_data);
 
-    return readWord(lex_data);
+    // word / keyword / identifier
+    if (isLetterOrDigit(current_char) || current_char == '_') {
+        return readWord(lex_data);
+    }
+
+    // unrecognized character
+    std::string msg = "Unexpected character '";
+    msg += current_char;
+    msg += "'";
+    throw LexerError(msg);
 }
 
 static void processCharacter(Lexer& lex_data) {

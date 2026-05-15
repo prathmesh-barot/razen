@@ -12,6 +12,7 @@
 #include "samples/sample3.h"
 #include "samples/sample4.h"
 #include "samples/sample5.h"
+#include "samples/comments.h"
 #include "samples/semantic_errors.h"
 
 using namespace razen;
@@ -112,4 +113,16 @@ int main() {
     convertCode("S08_STRUCT_FIELD_NOT_FOUND", semantic_errors::S08_STRUCT_FIELD_NOT_FOUND);
     convertCode("S09_UNDECLARED_FUNC", semantic_errors::S09_UNDECLARED_FUNC);
     convertCode("S10_GLOBAL_DUPLICATE", semantic_errors::S10_GLOBAL_DUPLICATE);
+
+    // Comments and escape sequences
+    convertCode("SINGLE_LINE_BASIC", sample_comments::SINGLE_LINE_BASIC);
+    convertCode("SINGLE_LINE_AFTER_CODE", sample_comments::SINGLE_LINE_AFTER_CODE);
+    convertCode("SINGLE_LINE_MULTIPLE", sample_comments::SINGLE_LINE_MULTIPLE);
+    convertCode("BLOCK_BASIC", sample_comments::BLOCK_BASIC);
+    convertCode("BLOCK_MULTI_LINE", sample_comments::BLOCK_MULTI_LINE);
+    convertCode("BLOCK_BEFORE_CODE", sample_comments::BLOCK_BEFORE_CODE);
+    convertCode("STRING_ESCAPES", sample_comments::STRING_ESCAPES);
+    convertCode("CHAR_ESCAPES", sample_comments::CHAR_ESCAPES);
+    convertCode("MIXED_FEATURES", sample_comments::MIXED_FEATURES);
+    convertCode("EMPTY_BLOCK", sample_comments::EMPTY_BLOCK);
 }

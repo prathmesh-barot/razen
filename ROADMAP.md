@@ -54,11 +54,11 @@
 - ✓ Delimiters: `(`, `)`, `{`, `}`, `[`, `]`
 - ✓ Integer literals (decimal)
 - ✓ Float literals
-- ◐ String literals — parsed but escape sequences (`\n`, `\t`, `\"`, `\\`, etc.) not processed
-- ◐ Char literals — parsed but escape sequences not processed
+- ✓ String literals with escape sequences (`\n`, `\t`, `\"`, `\\`, `\'`, `\0`, `\r`, `\xNN`)
+- ✓ Char literals with escape sequences
 - ✓ Bool literals (`true`, `false`)
-- ☐ Single-line comments (`//`) — token type exists but parsing not implemented
-- ☐ Block comments (`/* */`) — token types exist but parsing not implemented
+- ✓ Single-line comments (`//`) with correct line tracking
+- ✓ Block comments (`/* */`) spanning multiple lines with correct line tracking
 - ✓ Line/column tracking on every token
 - ✓ EOF token
 
@@ -69,7 +69,7 @@
 - ✓ Dot operator differentiation (`.`, `..`, `...`, `..=`)
 - ✓ Word/keyword/number disambiguation
 - ✓ Identifier tokenization
-- ◐ Unrecognized character handling (advances by 1, no dedicated error recovery)
+- ✓ Unrecognized character handling (throws `LexerError` with context)
 
 ---
 
@@ -266,7 +266,7 @@
 | Milestone | Description | Key Deliverables | Status |
 |-----------|-------------|------------------|--------|
 | M0 | C++ pipeline skeleton | Makefile, lexer, parser, semantic stubs | ✓ Complete |
-| M1 | Working lexer | Full tokenization of all Razen constructs | ✓ Complete (minor gaps: comments, escape seqs) |
+| M1 | Working lexer | Full tokenization of all Razen constructs | ✓ Complete |
 | M2 | Full parser + AST | All declarations, statements, expressions | ✓ Complete |
 | M3 | Semantic analysis | Type checking, scope, validation | ✓ Complete (basic) |
 | M4 | Struct codegen | Struct types, field access, methods | ☐ Not started |

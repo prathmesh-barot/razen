@@ -40,7 +40,6 @@ struct Lexer {
     std::string_view source;
     size_t line_count = 0;
     size_t character_count = 0;
-    bool was_comment = false;
 };
 
 // lexer entry point
