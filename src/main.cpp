@@ -15,6 +15,7 @@
 #include "samples/comments.h"
 #include "samples/stage2.h"
 #include "samples/semantic_errors.h"
+#include "codegen/codegen.h"
 
 using namespace razen;
 
@@ -65,6 +66,19 @@ static void convertCode(const char* label, const char* source) {
         return;
     }
     std::cout << "\t\tSemantic Analysis\t\t\tDone\n";
+
+    // Phase 4 — LLVM IR Codegen
+    std::cout << CREAM << "Phase 4" << RESET << "  ";
+    codegen::Codegen cg(label);
+    cg.generate(ast_nodes);
+    std::string ir_output = cg.getIR();
+    std::cout << "\t\tLLVM IR Codegen\t\t\t\tDone\n";
+    std::cout << "\n" << PEACH << "--- LLVM IR ---" << RESET << "\n";
+    std::cout << ir_output;
+    if (ir_output.size() > 500) {
+        std::cout << "... [output truncated, " << ir_output.size() << " bytes total]\n";
+    }
+    std::cout << PEACH << "--- End LLVM IR ---" << RESET << "\n";
 
     freeASTNodes(ast_nodes);
 }
