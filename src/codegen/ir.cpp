@@ -157,6 +157,7 @@ std::string typeToLLVM(ASTNode* type_node) {
         }
         default: {
             if (type_node->left) return typeToLLVM(type_node->left);
+            if (tt == TokenType::Identifier) return "%" + name;
             return "void";
         }
     }

@@ -19,6 +19,11 @@ struct Codegen {
     std::string current_ret_type;
     bool has_return_emitted = false;
 
+    // deferred statements for current function
+    std::vector<ASTNode*> deferred_stmts;
+    // struct field name map: struct_name → field names
+    std::unordered_map<std::string, std::vector<std::string>> struct_types;
+
     Codegen(const std::string& name = "main.rz") : source_name(name) {}
 
     void generate(const std::vector<ASTNode*>& ast_nodes);
@@ -42,6 +47,7 @@ private:
     std::string genCall(ASTNode* node);
     std::string genMemberAccess(ASTNode* node);
     std::string exprType(ASTNode* node);
+    void emitDeferred();
 };
 
 } // namespace codegen
