@@ -124,15 +124,14 @@ static void processGlobalToken(ASTData& d) {
                         ASTNode* gp = createDefaultAstNode();
                         gp->node_type = ASTNodeType::GenericParams;
                         gp->children = createChildList();
+                        // transfer identifiers from annotation to GenericParams, then clear annotation
                         for (auto* arg : *annotation->children) {
-                            if (arg->node_type == ASTNodeType::Identifier) {
+                            if (arg->node_type == ASTNodeType::Identifier)
                                 gp->children->push_back(arg);
-                            }
                         }
-                        if (gp->children->size() > 0) {
-                            // store after the annotation
+                        annotation->children->clear();
+                        if (gp->children->size() > 0)
                             appendChild(parsed_n, gp);
-                        }
                     }
                 }
             }

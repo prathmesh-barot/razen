@@ -176,8 +176,8 @@
 - ✓ Function argument count validation
 - ✓ Mutability checks (immutable assignment detection)
 - ✓ Undeclared identifier detection
-- ◐ Return type validation (checks if non-void function returns a value, no deep type flow analysis)
-- ☐ Function parameter type matching (argument types not checked against parameter types)
+- ✓ Return type validation (checks if non-void function returns a value, shows expected vs actual types with `typeToString`)
+- ✓ Function argument type matching (argument types analyzed, compared against parameter types with compatibility checks)
 - ☐ Constant expression evaluation (comptime)
 - ✓ Struct field declaration tracking
 - ✓ Enum variant tracking
@@ -185,17 +185,24 @@
 
 ### Type Checking
 - ✓ Expression type inference for `:=`
-- ✓ Operator type compatibility (arithmetic, comparison, logical, bitwise)
-- ✓ Assignment type compatibility
+- ✓ Operator type compatibility (arithmetic, comparison, logical, bitwise) with rich error messages showing actual types
+- ✓ Assignment type compatibility with `typeToString` diff messages
 - ✓ Pointer/reference type validation (address-of returns pointer type, dereference requires pointer)
-- ✓ If condition must be boolean
-- ✓ Loop condition must be boolean
+- ✓ If condition must be boolean — shows found type
+- ✓ Loop condition must be boolean — shows found type
 - ✓ Break/skip outside loop detection
 - ✓ Struct field access validation (field existence, returns field type)
-- ◐ Error union handling (try/catch recognized but no completeness checking for error coverage)
+- ✓ Error union handling (error_type extracted from named error sets, try/catch recognized)
 - ☐ Array/slice index validation
 - ☐ Behaviour implementation signature checking
 - ☐ Comptime const expression validation
+
+### Error Reporting
+- ✓ Categorized errors: `[TypeError]`, `[NameError]`, `[MutError]`, `[ReturnError]`, `[DeclError]`, `[FlowError]`, `[ArgError]`, `[SyntaxError]`, `[FieldError]`
+- ✓ Color-coded output with RED category tags and CYAN position info
+- ✓ Line:column position on every error (`line N:M`)
+- ✓ Expected vs found type display via `typeToString()` for pointer, optional, error union, struct, enum types
+- ✓ Compat helpers explain WHY types don't match
 
 ---
 
@@ -268,7 +275,7 @@
 | M0 | C++ pipeline skeleton | Makefile, lexer, parser, semantic stubs | ✓ Complete |
 | M1 | Working lexer | Full tokenization of all Razen constructs | ✓ Complete |
 | M2 | Full parser + AST | All declarations, statements, expressions, generics, ranges, else-if, block try, ext struct | ✓ Complete |
-| M3 | Semantic analysis | Type checking, scope, validation | ✓ Complete (basic) |
+| M3 | Semantic analysis | Type checking, scope, validation, categorized errors, typeToString, pointer/error union compatibility | ✓ Complete (improved) |
 | M4 | Struct codegen | Struct types, field access, methods | ☐ Not started |
 | M5 | Enum + Match | Enumerations compile, match dispatches | ☐ Not started |
 | M6 | Error handling | Error unions, try/catch | ☐ Not started |

@@ -49,17 +49,13 @@ inline void freeASTNode(ASTNode* n) {
             freeASTNode(child);
         }
         delete n->children;
+        n->children = nullptr;
     }
 
-    // free left, middle, right if they're not also in children
-    // We assume children are the canonical owner, and left/middle/right
-    // may point to the same nodes. To avoid double-free, we only free
-    // left/middle/right if children doesn't exist.
-    if (!n->children) {
-        freeASTNode(n->left);
-        freeASTNode(n->middle);
-        freeASTNode(n->right);
-    }
+    // free left, middle, right — these are always separate from children
+    freeASTNode(n->left);
+    freeASTNode(n->middle);
+    freeASTNode(n->right);
 
     delete n;
 }

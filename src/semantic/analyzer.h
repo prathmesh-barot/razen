@@ -1,5 +1,6 @@
 #pragma once
 #include <unordered_set>
+#include <string_view>
 #include "../ast/node.h"
 #include "symbol_table.h"
 #include "type_info.h"
@@ -16,7 +17,7 @@ struct Analyzer {
     Analyzer(Scope* gs, Scope* cs, std::unordered_set<std::string>&& whitelist, SymbolTable st)
         : undeclared_whitelist(std::move(whitelist)), sym_table(std::move(st)) {}
 
-    void reportError(const Token& token, const std::string& msg);
+    void reportError(const Token& token, const std::string& category, const std::string& msg);
     void analyze(const std::vector<ASTNode*>& ast_nodes);
 
 private:
@@ -40,7 +41,10 @@ private:
     TypeInfo* anaMemberAccess(ASTNode* node);
     TypeInfo* anaIdentifier(ASTNode* node);
     TypeInfo* anaFunctionCall(ASTNode* node);
-    bool typesCompatible(const TypeInfo* expected, const TypeInfo* actual);
+    bool typesCompatible(const TypeInfo* expected, const TypeInfo* actual, std::string* why = nullptr);
+
+    // helpers
+    std::string errPos(const Token& tok) const;
 };
 
 } // namespace razen
