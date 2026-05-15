@@ -249,8 +249,6 @@ TokenType getTokenType(std::string_view s) {
 
 // skip whitespace
 static bool shouldSkip(Lexer& lex_data) {
-    lex_data.character_count += 1;
-
     if (lex_data.character_index >= lex_data.source.size()) return false;
     char currentChar = lex_data.source[lex_data.character_index];
 
@@ -266,6 +264,7 @@ static bool shouldSkip(Lexer& lex_data) {
                       currentChar == ' ';
 
     if (is_special) {
+        lex_data.character_count += 1;
         lex_data.character_index += 1;
         return true;
     }
