@@ -21,8 +21,8 @@
 - ◐ Makefile build system (clang++-20, C++20, `make && ./razenc`) — uses Makefile, not CMake
 - ✓ Dependency on C++20 or later (`-std=c++20`)
 - ✓ `razenc` CLI binary (separate from host build)
-- ☐ Source file input (currently hardcoded samples in C++ string constants)
-- ☐ Output file flags (`--emit=ir`, `--emit=obj`, `--emit=bin`)
+- ✓ Source file input (positional `.rzn` args + `-f` flag)
+- ◐ Output file flags (`--emit=obj`/`--emit=asm` via `emitObject`/`emitAssembly` — no `--emit=` CLI flag yet)
 - ☐ Target triple specification for cross-compilation
 - ☐ Optimization level flags (-O0 through -O3)
 - ◐ DWARF debug info generation (`-g` flag present, no structured debug info pipeline)
@@ -216,6 +216,9 @@
 - ✓ ConvertData shared state (Codegen struct with locals, types, maps)
 - ✓ StringBuilder for efficient IR assembly (IRBuilder with ostringstream)
 - ✓ Comment nodes skipped in codegen
+- ✓ Optimization pipeline (mem2reg + instcombine via new PM PassBuilder)
+- ✓ Object/assembly emission (emitObject/emitAssembly via TargetMachine)
+- ✓ CLI: --verbose/--debug, --help, --version, -f, positional file args
 
 ### Type Mapping to LLVM
 - ✓ Primitive types: i1-u128, f16-f128, bool→i1, char→i8, void, str→i32, string→i32, any→i8*
@@ -341,9 +344,11 @@
 | M4 | Struct codegen | Struct types, field access, methods | ◐ Partial — types + fields done, methods basic |
 | M5 | Enum + Match | Enumerations compile, match dispatches | ✓ Complete — backing types, variant values, icmp dispatch |
 | M6 | Error handling | Error unions, try/catch | ◐ Partial — error sets, try expr branching done, union propagation basic |
-| M7 | Collections | Vec, Map, Set with generics | ☐ Not started |
-| M8 | Std complete | All 24 std modules implemented | ☐ Not started |
-| M9 | Self-hosting | Razen compiler compiles itself | ☐ Not started |
+| M7 | Codegen optimization | mem2reg, instcombine, object emission | ✓ Complete — new PM pipeline, TargetMachine |
+| M8 | CLI & tooling | --help, --version, -v, file input, quiet mode | ✓ Complete |
+| M9 | Collections | Vec, Map, Set with generics | ☐ Not started |
+| M10 | Std complete | All 24 std modules implemented | ☐ Not started |
+| M11 | Self-hosting | Razen compiler compiles itself | ☐ Not started |
 
 ---
 
@@ -357,7 +362,7 @@
 
 ---
 
-**Progress:** Phases 1-3 (Lexer, Parser, Semantic Analysis) complete. Phase 4 (Codegen) ~80% complete — core infrastructure (PLAN Phases 1-16) fully done, advanced features (Phases 17-20: enums, unions, error handling, struct methods) substantially implemented. Phases 5-7 (Std Lib, Self-hosting) not started.
+**Progress:** Phases 1-3 (Lexer, Parser, Semantic Analysis) complete. Phase 4 (Codegen) ~85% complete — core infrastructure (PLAN Phases 1-16) fully done, optimization pipeline (mem2reg + instcombine), object/assembly emission (emitObject/emitAssembly), and CLI (--help, --version, -v, file args) all done. Remaining codegen work: struct methods, string dedup, binary SExt→ZExt, global var non-constant init. Phases 5-7 (Std Lib, Self-hosting) not started.
 **Std Library:** 0% complete.
-**49/64 sample programs** pass through all 4 phases and produce LLVM IR (remaining 15 are intentional semantic error tests or have known return-tracking limitations).
-**Next Target:** Phase 5 (Std Library) — std.core, std.fmt, std.io, std.mem. Verify emitted IR with `llc`.
+**All 10 sample programs** produce valid `.o` and `.s` files; compiled `.o` files link and execute correctly.
+**Next Target:** Remaining codegen bugs (#16 string dedup, #22 ZExt coercion, #23 global init) + struct method codegen.
