@@ -1,6 +1,7 @@
 #include "ir.h"
 #include "../ast/token_utils.h"
 #include <llvm/IR/Verifier.h>
+#include <llvm/IR/GlobalValue.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/raw_os_ostream.h>
 #include <sstream>
@@ -13,32 +14,24 @@ namespace codegen {
 
 // ── Primitive type mapping ──────────────────────────────────────────────────
 
-static Type* primitiveType(LLVMContext& ctx, const std::string& name) {
-    if (name == "void" || name == "noret")  return Type::getVoidTy(ctx);
-    if (name == "bool")                     return Type::getInt1Ty(ctx);
-    if (name == "char")                     return Type::getInt8Ty(ctx);
-    if (name == "i8" || name == "u8")       return Type::getInt8Ty(ctx);
-    if (name == "i16" || name == "u16")     return Type::getInt16Ty(ctx);
+static Type* primitiveType(LLVMContext& Ctx, const std::string& name) {
+    if (name == "void" || name == "noret")  return Type::getVoidTy(Ctx);
+    if (name == "bool")                     return Type::getInt1Ty(Ctx);
+    if (name == "char")                     return Type::getInt8Ty(Ctx);
+    if (name == "i8" || name == "u8")       return Type::getInt8Ty(Ctx);
+    if (name == "i16" || name == "u16")     return Type::getInt16Ty(Ctx);
     if (name == "i32" || name == "u32" || name == "int" || name == "uint")
-                                            return Type::getInt32Ty(ctx);
+                                            return Type::getInt32Ty(Ctx);
     if (name == "i64" || name == "u64" || name == "isize" || name == "usize")
-                                            return Type::getInt64Ty(ctx);
-    if (name == "i128" || name == "u128")   return Type::getInt128Ty(ctx);
-    if (name == "f16")                      return Type::getHalfTy(ctx);
-    if (name == "f32" || name == "float")   return Type::getFloatTy(ctx);
-    if (name == "f64")                      return Type::getDoubleTy(ctx);
-    if (name == "f128")                     return Type::getFP128Ty(ctx);
-    if (name == "any")                      return PointerType::getUnqual(ctx);
-    if (name == "str" || name == "string")  return PointerType::getUnqual(ctx);
-    return Type::getInt32Ty(ctx);
-}
-
-static bool isFloatType(Type* ty) {
-    return ty->isHalfTy() || ty->isFloatTy() || ty->isDoubleTy() || ty->isFP128Ty();
-}
-
-static bool isIntType(Type* ty) {
-    return ty->isIntegerTy();
+                                            return Type::getInt64Ty(Ctx);
+    if (name == "i128" || name == "u128")   return Type::getInt128Ty(Ctx);
+    if (name == "f16")                      return Type::getHalfTy(Ctx);
+    if (name == "f32" || name == "float")   return Type::getFloatTy(Ctx);
+    if (name == "f64")                      return Type::getDoubleTy(Ctx);
+    if (name == "f128")                     return Type::getFP128Ty(Ctx);
+    if (name == "any")                      return PointerType::getUnqual(Ctx);
+    if (name == "str" || name == "string")  return PointerType::getUnqual(Ctx);
+    return Type::getInt32Ty(Ctx);
 }
 
 // ── Type resolution from AST node ───────────────────────────────────────────
@@ -204,7 +197,7 @@ Value* IRGen::createGEP(Value* ptr, Type* ty, unsigned idx) {
     return builder.CreateStructGEP(ty, ptr, idx);
 }
 
-Value* IRGen::createStructGEP(Value* ptr, Type* ty, unsigned idx0, unsigned idx1) {
+Value* IRGen::createStructGEP(Value* ptr, Type* ty, unsigned, unsigned idx1) {
     return builder.CreateGEP(ty, ptr, {ConstantInt::get(Type::getInt32Ty(ctx), 0),
                                         ConstantInt::get(Type::getInt32Ty(ctx), idx1)});
 }

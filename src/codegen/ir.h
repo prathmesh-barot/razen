@@ -10,6 +10,7 @@
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/DerivedTypes.h>
 #include "../ast/node.h"
@@ -28,6 +29,7 @@ inline bool isFloatTy(llvm::Type* ty) {
 struct TypeRegistry {
     std::unordered_map<std::string, llvm::StructType*> structs;
     std::unordered_map<std::string, llvm::Type*> aliases;
+    std::unordered_map<std::string, std::vector<std::string>> field_names;
 };
 
 // ── LLVM IR generation context ──────────────────────────────────────────────
@@ -77,6 +79,10 @@ struct IRGen {
 
     explicit IRGen(const std::string& source = "main.rz")
         : module(source, ctx), builder(ctx) {}
+    IRGen(const IRGen&) = delete;
+    IRGen& operator=(const IRGen&) = delete;
+    IRGen(IRGen&&) = delete;
+    IRGen& operator=(IRGen&&) = delete;
 
     // ── Public API ──
     llvm::Type* razenType(ASTNode* node);
