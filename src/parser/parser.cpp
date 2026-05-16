@@ -52,10 +52,15 @@ static void consumeSemi(ASTData& d) {
 
 // ── entry point ────────────────────────────────────────────────────────────
 
+static bool show_parser_progress = false;
+
+void setParserVerbose(bool v) { show_parser_progress = v; }
+
 std::vector<ASTNode*> buildAST(const std::vector<Token>& token_list, std::string_view source) {
     (void)source;
 
-    std::cout << "\t" << GREY << "Formatting AST" << RESET << "\t\t\t";
+    if (show_parser_progress)
+        std::cout << "\t" << GREY << "Formatting AST" << RESET << "\t\t\t";
 
     ASTData ast_data;
     ast_data.ast_nodes = new std::vector<ASTNode*>();
@@ -89,7 +94,9 @@ std::vector<ASTNode*> buildAST(const std::vector<Token>& token_list, std::string
         if (before == ast_data.token_index) ast_data.token_index++;
     }
 
-    std::cout << CYAN << "Done" << RESET << "\n";
+    if (show_parser_progress)
+        std::cout << CYAN << "Done" << RESET << "\n";
+
     return *ast_data.ast_nodes;
 }
 

@@ -553,12 +553,17 @@ static void processCharacter(Lexer& lex_data) {
 
 // ── main entry point ────────────────────────────────────────────────────────
 
+static bool show_lex_progress = false;
+
+void setLexerVerbose(bool v) { show_lex_progress = v; }
+
 std::vector<Token> parseToTokens(std::string_view source) {
     if (source.empty()) {
         throw LexerError("Source code length is zero");
     }
 
-    std::cout << "\t" << GREY << "Parsing" << RESET << "\t\t\t\t";
+    if (show_lex_progress)
+        std::cout << "\t" << GREY << "Parsing" << RESET << "\t\t\t\t";
 
     Lexer lex_data;
     lex_data.source = source;
@@ -569,7 +574,9 @@ std::vector<Token> parseToTokens(std::string_view source) {
 
     lex_data.token_list.push_back(Token{TokenType::EOF_, "", lex_data.line_count, lex_data.character_count});
 
-    std::cout << CYAN << "Done" << RESET << "\n";
+    if (show_lex_progress)
+        std::cout << CYAN << "Done" << RESET << "\n";
+
     return std::move(lex_data.token_list);
 }
 

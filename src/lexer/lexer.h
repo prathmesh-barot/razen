@@ -45,6 +45,9 @@ struct Lexer {
 // lexer entry point
 std::vector<Token> parseToTokens(std::string_view source);
 
+// control debug output
+void setLexerVerbose(bool v);
+
 // helpers
 bool isOperator(char c);
 bool isSeparator(char c);
