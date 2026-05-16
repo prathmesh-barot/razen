@@ -1,166 +1,222 @@
 #include "ir.h"
 #include "../ast/token_utils.h"
+#include <llvm/IR/Verifier.h>
+#include <llvm/Support/raw_ostream.h>
+#include <llvm/Support/raw_os_ostream.h>
+#include <sstream>
+#include <iostream>
+
+using namespace llvm;
 
 namespace razen {
 namespace codegen {
 
-void IRBuilder::emitLine(const std::string& line) {
-    module << indent_str << line << "\n";
+// ── Primitive type mapping ──────────────────────────────────────────────────
+
+static Type* primitiveType(LLVMContext& ctx, const std::string& name) {
+    if (name == "void" || name == "noret")  return Type::getVoidTy(ctx);
+    if (name == "bool")                     return Type::getInt1Ty(ctx);
+    if (name == "char")                     return Type::getInt8Ty(ctx);
+    if (name == "i8" || name == "u8")       return Type::getInt8Ty(ctx);
+    if (name == "i16" || name == "u16")     return Type::getInt16Ty(ctx);
+    if (name == "i32" || name == "u32" || name == "int" || name == "uint")
+                                            return Type::getInt32Ty(ctx);
+    if (name == "i64" || name == "u64" || name == "isize" || name == "usize")
+                                            return Type::getInt64Ty(ctx);
+    if (name == "i128" || name == "u128")   return Type::getInt128Ty(ctx);
+    if (name == "f16")                      return Type::getHalfTy(ctx);
+    if (name == "f32" || name == "float")   return Type::getFloatTy(ctx);
+    if (name == "f64")                      return Type::getDoubleTy(ctx);
+    if (name == "f128")                     return Type::getFP128Ty(ctx);
+    if (name == "any")                      return PointerType::getUnqual(ctx);
+    if (name == "str" || name == "string")  return PointerType::getUnqual(ctx);
+    return Type::getInt32Ty(ctx);
 }
 
-void IRBuilder::emitRaw(const std::string& text) {
-    module << text;
+static bool isFloatType(Type* ty) {
+    return ty->isHalfTy() || ty->isFloatTy() || ty->isDoubleTy() || ty->isFP128Ty();
 }
 
-void IRBuilder::emitPreamble(const std::string& source_name) {
-    emitLine("; ModuleID = '" + source_name + "'");
-    emitLine("source_filename = \"" + source_name + "\"");
-    emitLine("target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"");
-    emitLine("target triple = \"x86_64-pc-linux-gnu\"");
-    emitLine("");
+static bool isIntType(Type* ty) {
+    return ty->isIntegerTy();
 }
 
-void IRBuilder::emitLibcDecls() {
-    emitLine("declare i32 @printf(i8*, ...)");
-    emitLine("declare i32 @puts(i8*)");
-    emitLine("declare void @exit(i32)");
-    emitLine("declare void @abort() noreturn");
-    emitLine("");
+// ── Type resolution from AST node ───────────────────────────────────────────
+
+Type* IRGen::razenType(ASTNode* node) {
+    if (!node) return Type::getVoidTy(ctx);
+
+    if (node->node_type == ASTNodeType::ArrayType) {
+        Type* elem = node->left ? razenType(node->left) : Type::getInt8Ty(ctx);
+        if (node->middle && node->middle->token) {
+            unsigned sz = std::stoul(node->middle->token->value);
+            return ArrayType::get(elem, sz);
+        }
+        return PointerType::getUnqual(ctx);
+    }
+
+    if (node->node_type != ASTNodeType::VarType) return Type::getVoidTy(ctx);
+    auto tok = node->token;
+    if (!tok) return Type::getVoidTy(ctx);
+
+    auto& name = tok->value;
+    auto tt = tok->type;
+
+    // Pointer: *T
+    if (tt == TokenType::Star) {
+        Type* inner = node->left ? razenType(node->left) : Type::getInt8Ty(ctx);
+        return PointerType::getUnqual(inner);
+    }
+
+    // Optional: ?T  →  { i1, T }
+    if (tt == TokenType::QuestionMark) {
+        Type* inner = node->left ? razenType(node->left) : Type::getVoidTy(ctx);
+        return StructType::get(ctx, {Type::getInt1Ty(ctx), inner});
+    }
+
+    // Failable: !T  →  { i1, T }
+    if (tt == TokenType::ExclamationMark) {
+        Type* inner = node->left ? razenType(node->left) : Type::getVoidTy(ctx);
+        return StructType::get(ctx, {Type::getInt1Ty(ctx), inner});
+    }
+
+    // Error union: Error!T  →  { i1, T }
+    if (tt == TokenType::Identifier && node->left) {
+        Type* inner = razenType(node->left);
+        return StructType::get(ctx, {Type::getInt1Ty(ctx), inner});
+    }
+
+    // Self reference
+    if (name == "Self" && !current_struct.empty()) {
+        auto it = types.structs.find(current_struct);
+        if (it != types.structs.end())
+            return PointerType::getUnqual(it->second);
+        return PointerType::getUnqual(ctx);
+    }
+
+    // Named struct/union
+    if (tt == TokenType::Identifier) {
+        auto sit = types.structs.find(name);
+        if (sit != types.structs.end()) return sit->second;
+        auto ait = types.aliases.find(name);
+        if (ait != types.aliases.end()) return ait->second;
+        return Type::getInt32Ty(ctx);
+    }
+
+    return primitiveType(ctx, name);
 }
 
-std::string IRBuilder::tmp(const std::string& prefix) {
-    return prefix + "." + std::to_string(tmp_counter++);
-}
-
-std::string IRBuilder::label(const std::string& prefix) {
-    return prefix + "." + std::to_string(label_counter++);
-}
-
-std::string IRBuilder::strName() {
-    return "@.str." + std::to_string(str_counter++);
-}
-
-std::string IRBuilder::getIR() {
-    return module.str();
-}
-
-std::string typeToLLVM(const TypeInfo* type) {
-    if (!type) return "void";
-    switch (type->category) {
-        case TypeCategory::Void:    return "void";
-        case TypeCategory::Bool:    return "i1";
+Type* IRGen::razenType(const TypeInfo* ti) {
+    if (!ti) return Type::getVoidTy(ctx);
+    switch (ti->category) {
+        case TypeCategory::Void: case TypeCategory::Noret:
+            return Type::getVoidTy(ctx);
+        case TypeCategory::Bool:
+            return Type::getInt1Ty(ctx);
         case TypeCategory::Integer: {
-            auto& name = type->name;
-            if (name == "i1" || name == "u1") return "i1";
-            if (name == "i2" || name == "u2") return "i2";
-            if (name == "i4" || name == "u4") return "i4";
-            if (name == "i8" || name == "u8") return "i8";
-            if (name == "i16" || name == "u16") return "i16";
-            if (name == "i32" || name == "u32" || name == "int" || name == "uint") return "i32";
-            if (name == "i64" || name == "u64" || name == "isize" || name == "usize") return "i64";
-            if (name == "i128" || name == "u128") return "i128";
-            return "i32";
+            auto& n = ti->name;
+            if (n == "i8" || n == "u8") return Type::getInt8Ty(ctx);
+            if (n == "i16" || n == "u16") return Type::getInt16Ty(ctx);
+            if (n == "i32" || n == "u32" || n == "int" || n == "uint") return Type::getInt32Ty(ctx);
+            if (n == "i64" || n == "u64" || n == "isize" || n == "usize") return Type::getInt64Ty(ctx);
+            if (n == "i128" || n == "u128") return Type::getInt128Ty(ctx);
+            return Type::getInt32Ty(ctx);
         }
         case TypeCategory::Float: {
-            auto& name = type->name;
-            if (name == "f16") return "half";
-            if (name == "f32" || name == "float") return "float";
-            if (name == "f64") return "double";
-            if (name == "f128") return "fp128";
-            return "double";
+            auto& n = ti->name;
+            if (n == "f16") return Type::getHalfTy(ctx);
+            if (n == "f32" || n == "float") return Type::getFloatTy(ctx);
+            if (n == "f64") return Type::getDoubleTy(ctx);
+            if (n == "f128") return Type::getFP128Ty(ctx);
+            return Type::getDoubleTy(ctx);
         }
-        case TypeCategory::Char:    return "i8";
-        case TypeCategory::Str:     return "i32";
-        case TypeCategory::String:  return "i32";
-        case TypeCategory::Any:     return "i8*";
-        case TypeCategory::Pointer: return "ptr";
-        case TypeCategory::Noret:   return "void";
-        case TypeCategory::Optional: {
-            auto inner = type->elem_type ? typeToLLVM(type->elem_type) : "void";
-            return "{ i1, " + inner + " }";
-        }
-        case TypeCategory::Failable: {
-            auto inner = type->elem_type ? typeToLLVM(type->elem_type) : "void";
-            return "{ i1, " + inner + " }";
-        }
-        case TypeCategory::ErrorUnion: {
-            auto ok = type->ok_type ? typeToLLVM(type->ok_type) : "void";
-            return "{ i1, " + ok + " }";
+        case TypeCategory::Char:
+            return Type::getInt8Ty(ctx);
+        case TypeCategory::Str: case TypeCategory::String: case TypeCategory::Any:
+            return PointerType::getUnqual(ctx);
+        case TypeCategory::Pointer:
+            return PointerType::getUnqual(ctx);
+        case TypeCategory::Optional: case TypeCategory::Failable: case TypeCategory::ErrorUnion: {
+            Type* inner = ti->elem_type ? razenType(ti->elem_type) : Type::getVoidTy(ctx);
+            return StructType::get(ctx, {Type::getInt1Ty(ctx), inner});
         }
         case TypeCategory::Array: {
-            auto elem = type->elem_type ? typeToLLVM(type->elem_type) : "i8";
-            if (type->array_size > 0)
-                return "[" + std::to_string(type->array_size) + " x " + elem + "]";
-            return "ptr";
+            Type* elem = ti->elem_type ? razenType(ti->elem_type) : Type::getInt8Ty(ctx);
+            if (ti->array_size > 0)
+                return ArrayType::get(elem, ti->array_size);
+            return PointerType::getUnqual(ctx);
         }
-        case TypeCategory::Struct:  return "%" + type->name;
-        case TypeCategory::Enum:    return "i32";
-        case TypeCategory::Union:   return "%" + type->name;
-        case TypeCategory::ErrorSet: return "i32";
-        default: return "void";
+        case TypeCategory::Struct: {
+            auto it = types.structs.find(ti->name);
+            if (it != types.structs.end()) return it->second;
+            return Type::getInt32Ty(ctx);
+        }
+        case TypeCategory::Enum:
+            return Type::getInt32Ty(ctx);
+        case TypeCategory::Union: {
+            auto it = types.structs.find(ti->name);
+            if (it != types.structs.end()) return it->second;
+            return Type::getInt32Ty(ctx);
+        }
+        case TypeCategory::ErrorSet:
+            return Type::getInt32Ty(ctx);
+        default:
+            return Type::getInt32Ty(ctx);
     }
 }
 
-std::string typeToLLVM(ASTNode* type_node) {
-    if (!type_node) return "void";
-    if (type_node->node_type == ASTNodeType::ArrayType) {
-        auto elem = type_node->left ? typeToLLVM(type_node->left) : "i8";
-        std::string size_str;
-        if (type_node->middle && type_node->middle->token) {
-            size_str = "[" + type_node->middle->token->value + " x ";
-        } else {
-            return "ptr";
-        }
-        return size_str + elem + "]";
+Type* IRGen::resolveType(ASTNode* node) {
+    if (!node) return Type::getVoidTy(ctx);
+    if (node->node_type == ASTNodeType::VarType &&
+        node->token && node->token->value == "Self") {
+        auto it = types.structs.find(current_struct);
+        if (it != types.structs.end())
+            return PointerType::getUnqual(it->second);
+        return PointerType::getUnqual(ctx);
     }
-    if (type_node->node_type != ASTNodeType::VarType) return "void";
-    auto tok = type_node->token;
-    if (!tok) return "void";
-    auto tt = tok->type;
-    auto& name = tok->value;
+    return razenType(node);
+}
 
-    if (isIntegerType(tt)) {
-        if (name == "i1" || name == "u1") return "i1";
-        if (name == "i2" || name == "u2") return "i2";
-        if (name == "i4" || name == "u4") return "i4";
-        if (name == "i8" || name == "u8") return "i8";
-        if (name == "i16" || name == "u16") return "i16";
-        if (name == "i32" || name == "u32" || name == "int" || name == "uint") return "i32";
-        if (name == "i64" || name == "u64" || name == "isize" || name == "usize") return "i64";
-        if (name == "i128" || name == "u128") return "i128";
-        return "i32";
-    }
-    if (isFloatType(tt)) {
-        if (name == "f16") return "half";
-        if (name == "f32" || name == "float") return "float";
-        if (name == "f64") return "double";
-        if (name == "f128") return "fp128";
-        return "double";
-    }
+// ── Alloca helper (mem2reg-friendly) ────────────────────────────────────────
 
-    switch (tt) {
-        case TokenType::Bool:   return "i1";
-        case TokenType::Char:   return "i8";
-        case TokenType::Void:   return "void";
-        case TokenType::Noret:  return "void";
-        case TokenType::Str:    return "i32";
-        case TokenType::String: return "i32";
-        case TokenType::Any:    return "i8*";
-        case TokenType::Star:   return "ptr";
-        case TokenType::QuestionMark: {
-            auto inner = type_node->left ? typeToLLVM(type_node->left) : "void";
-            return "{ i1, " + inner + " }";
-        }
-        case TokenType::ExclamationMark: {
-            auto inner = type_node->left ? typeToLLVM(type_node->left) : "void";
-            return "{ i1, " + inner + " }";
-        }
-        default: {
-            if (type_node->left) return typeToLLVM(type_node->left);
-            if (tt == TokenType::Identifier) return "%" + name;
-            return "void";
-        }
-    }
+void IRGen::createEntryBlockAlloca(Function* fn, const std::string& name, Type* ty) {
+    IRBuilder<> tmp(&fn->getEntryBlock(), fn->getEntryBlock().begin());
+    auto* alloca = tmp.CreateAlloca(ty, nullptr, name);
+    named_values[name] = alloca;
+    named_types[name] = ty;
+}
+
+Value* IRGen::loadVariable(const std::string& name) {
+    auto it = named_values.find(name);
+    if (it == named_values.end()) return nullptr;
+    return builder.CreateLoad(named_types[name], it->second, name.c_str());
+}
+
+void IRGen::storeVariable(const std::string& name, Value* val) {
+    auto it = named_values.find(name);
+    if (it == named_values.end()) return;
+    builder.CreateStore(val, it->second);
+}
+
+// ── GEP helpers ─────────────────────────────────────────────────────────────
+
+Value* IRGen::createGEP(Value* ptr, Type* ty, unsigned idx) {
+    return builder.CreateStructGEP(ty, ptr, idx);
+}
+
+Value* IRGen::createStructGEP(Value* ptr, Type* ty, unsigned idx0, unsigned idx1) {
+    return builder.CreateGEP(ty, ptr, {ConstantInt::get(Type::getInt32Ty(ctx), 0),
+                                        ConstantInt::get(Type::getInt32Ty(ctx), idx1)});
+}
+
+// ── Module dumping ──────────────────────────────────────────────────────────
+
+std::string IRGen::dumpModule(Module& m) {
+    std::string str;
+    raw_string_ostream os(str);
+    m.print(os, nullptr);
+    os.flush();
+    return str;
 }
 
 } // namespace codegen

@@ -1,732 +1,765 @@
 #include "codegen.h"
 #include "../ast/ast_utils.h"
 #include "../ast/token_utils.h"
+#include <llvm/IR/Verifier.h>
+#include <llvm/IR/Attributes.h>
 #include <iostream>
 #include <cstring>
+
+using namespace llvm;
 
 namespace razen {
 namespace codegen {
 
-// ── Phase 6: Global dispatch ────────────────────────────────────────────────
+// ── Module setup & top-level dispatch ───────────────────────────────────────
 
-void Codegen::generate(const std::vector<ASTNode*>& ast_nodes) {
-    ir.emitPreamble(source_name);
-    ir.emitLibcDecls();
+void Codegen::generate(const std::vector<ASTNode*>& nodes) {
+    auto& ctx = ir.ctx;
+    auto& mod = ir.module;
 
-    for (auto* node : ast_nodes) {
-        genNode(node);
+    mod.setTargetTriple("x86_64-pc-linux-gnu");
+    mod.setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128");
+
+    // Libc / runtime declarations (modern LLVM pattern with attributes)
+    auto* int32 = Type::getInt32Ty(ctx);
+    auto* i8ptr = PointerType::getUnqual(ctx);
+    auto* voidTy = Type::getVoidTy(ctx);
+
+    {
+        auto callee = mod.getOrInsertFunction("printf", FunctionType::get(int32, {i8ptr}, true));
+        if (auto* f = dyn_cast<Function>(callee.getCallee())) {
+            f->setDoesNotThrow();
+            f->addParamAttr(0, Attribute::ReadOnly);
+        }
     }
+    {
+        auto callee = mod.getOrInsertFunction("puts", FunctionType::get(int32, {i8ptr}, false));
+        if (auto* f = dyn_cast<Function>(callee.getCallee())) {
+            f->setDoesNotThrow();
+            f->addParamAttr(0, Attribute::ReadOnly);
+        }
+    }
+    {
+        auto callee = mod.getOrInsertFunction("exit", FunctionType::get(voidTy, {int32}, false));
+        if (auto* f = dyn_cast<Function>(callee.getCallee())) {
+            f->setDoesNotThrow();
+        }
+    }
+    {
+        auto callee = mod.getOrInsertFunction("abort", FunctionType::get(voidTy, true));
+        if (auto* f = dyn_cast<Function>(callee.getCallee())) {
+            f->setDoesNotThrow();
+        }
+    }
+
+    // Pass 1: collect type declarations (structs, enums, unions, errors)
+    for (auto* node : nodes) {
+        if (!node) continue;
+        switch (node->node_type) {
+            case ASTNodeType::StructDeclaration:  ir.genStruct(node); break;
+            case ASTNodeType::EnumDeclaration:    ir.genEnum(node);   break;
+            case ASTNodeType::UnionDeclaration:   ir.genUnion(node);  break;
+            case ASTNodeType::ErrorDeclaration:   ir.genError(node);  break;
+            default: break;
+        }
+    }
+
+    // Pass 2: emit function declarations (ext func) for forward references
+    for (auto* node : nodes) {
+        if (node && node->node_type == ASTNodeType::ExtDeclaration) {
+            ir.genExt(node);
+        }
+    }
+
+    // Pass 3: emit function definitions and globals
+    for (auto* node : nodes) {
+        if (!node) continue;
+        switch (node->node_type) {
+            case ASTNodeType::FunctionDeclaration:
+                ir.genFunc(node);
+                break;
+            case ASTNodeType::VarDeclaration:
+            case ASTNodeType::ConstDeclaration:
+                try {
+                    ir.genVar(node, node->node_type == ASTNodeType::ConstDeclaration);
+                } catch (...) {
+                    errs() << "Warning: failed to codegen variable " << (node->token ? node->token->value : "?") << "\n";
+                }
+                break;
+            default: break;
+        }
+    }
+
+    verifyModule(mod, &errs());
 }
 
-void Codegen::genNode(ASTNode* node) {
+// ── IRGen top-level dispatch ────────────────────────────────────────────────
+
+void IRGen::genTopLevel(ASTNode* node) {
     if (!node) return;
-    if (node->node_type == ASTNodeType::Comment ||
-        node->node_type == ASTNodeType::Annotation ||
-        node->node_type == ASTNodeType::GenericParams)
-        return;
-
     switch (node->node_type) {
-        case ASTNodeType::FunctionDeclaration:
-            genFuncDecl(node);
-            break;
-        case ASTNodeType::ExtDeclaration: {
-            std::string ret_type = "i32";
-            if (node->left && node->left->node_type == ASTNodeType::ReturnType && node->left->left)
-                ret_type = typeToLLVM(node->left->left);
-            std::string name = node->token ? node->token->value : "extern";
-            std::string params;
-            if (node->middle && node->middle->children) {
-                for (size_t i = 0; i < node->middle->children->size(); i++) {
-                    if (i > 0) params += ", ";
-                    auto* p = (*node->middle->children)[i];
-                    if (p->node_type == ASTNodeType::Parameter) {
-                        params += p->left ? typeToLLVM(p->left) : "i32";
-                    }
-                }
-            }
-            if (params.empty()) params = "void";
-            ir.emitLine("declare " + ret_type + " @" + name + "(" + params + ")");
-            break;
-        }
-        case ASTNodeType::VarDeclaration:
-        case ASTNodeType::ConstDeclaration:
-            genVarDecl(node);
-            break;
-        case ASTNodeType::Block:
-            genBlock(node);
-            break;
-        case ASTNodeType::ReturnStatement:
-            genReturn(node);
-            break;
-        case ASTNodeType::IfStatement:
-        case ASTNodeType::ElseIfStatement:
-            genIf(node);
-            break;
-        case ASTNodeType::LoopStatement:
-            genLoop(node);
-            break;
-        case ASTNodeType::Assignment:
-            genAssign(node);
-            break;
-        case ASTNodeType::MatchStatement:
-            genMatch(node);
-            break;
-        case ASTNodeType::BreakStatement:
-            ir.emitLine("br label %" + ir.label(".loop.end"));
-            break;
-        case ASTNodeType::SkipStatement:
-            ir.emitLine("br label %" + ir.label(".loop.continue"));
-            break;
-        case ASTNodeType::DeferStatement:
-            if (node->left) deferred_stmts.push_back(node->left);
-            break;
-        case ASTNodeType::TryBlock: {
-            auto catch_label = ir.label(".try.catch");
-            auto end_label = ir.label(".try.end");
-            std::string prev_catch = current_catch_label;
-            current_catch_label = catch_label;
-            if (node->left) genNode(node->left);
-            ir.emitLine("br label %" + end_label);
-            ir.emitLine("");
-            ir.emitLine(catch_label + ":");
-            if (node->right && node->right->node_type == ASTNodeType::CatchExpression) {
-                if (node->right->left) genNode(node->right->left);
-            }
-            ir.emitLine("br label %" + end_label);
-            ir.emitLine("");
-            ir.emitLine(end_label + ":");
-            current_catch_label = prev_catch;
-            break;
-        }
-        case ASTNodeType::TryExpression:
-            if (node->left) genNode(node->left);
-            if (node->right) genNode(node->right);
-            break;
-        case ASTNodeType::CatchExpression:
-            if (node->left) genNode(node->left);
-            break;
-        case ASTNodeType::IfBody:
-        case ASTNodeType::ElseBody:
-        case ASTNodeType::LoopBody:
-        case ASTNodeType::MatchBody:
-            if (node->left && node->left->node_type == ASTNodeType::Block)
-                genBlock(node->left);
-            else if (node->children)
-                for (auto* child : *node->children) genNode(child);
-            break;
-        case ASTNodeType::MatchCase:
-            if (node->right) genNode(node->right);
-            break;
-        case ASTNodeType::StructDeclaration: {
-            if (!node->token) break;
-            auto& sname = node->token->value;
-            std::vector<std::string> field_names;
-            std::string struct_def = "%" + sname + " = type { ";
-            bool first_field = true;
-
-            // Collect methods and field types
-            struct_methods[sname].clear();
-            struct_field_types[sname].clear();
-
-            if (node->children) {
-                for (auto* child : *node->children) {
-                    if (child->node_type == ASTNodeType::StructField) {
-                        if (child->token) field_names.push_back(child->token->value);
-                        if (!first_field) struct_def += ", ";
-                        std::string ftype = child->left ? typeToLLVM(child->left) : "i32";
-                        struct_def += ftype;
-                        first_field = false;
-                        if (child->token)
-                            struct_field_types[sname][child->token->value] = ftype;
-                    } else if (child->node_type == ASTNodeType::FunctionDeclaration) {
-                        struct_methods[sname].push_back(child);
-                    }
-                }
-            }
-            struct_def += " }";
-            struct_types[sname] = field_names;
-            ir.emitLine(struct_def);
-
-            // Emit struct methods
-            current_struct_name = sname;
-            for (auto* method : struct_methods[sname]) {
-                std::string orig_name = method->token ? method->token->value : "method";
-                method->token->value = sname + "." + orig_name;
-                genFuncDecl(method);
-                method->token->value = orig_name;
-            }
-            current_struct_name.clear();
-            break;
-        }
-        case ASTNodeType::EnumDeclaration:
-            genEnumDecl(node);
-            break;
-        case ASTNodeType::UnionDeclaration:
-            genUnionDecl(node);
-            break;
-        case ASTNodeType::ErrorDeclaration:
-            genErrorDecl(node);
-            break;
-        case ASTNodeType::TypeAliasDeclaration:
+        case ASTNodeType::Comment:
+        case ASTNodeType::Annotation:
+        case ASTNodeType::GenericParams:
         case ASTNodeType::ModuleDeclaration:
         case ASTNodeType::UseDeclaration:
         case ASTNodeType::BehaveDeclaration:
-            break;
-        default:
-            break;
+        case ASTNodeType::TypeAliasDeclaration:
+            return;
+        case ASTNodeType::FunctionDeclaration:   genFunc(node); break;
+        case ASTNodeType::ExtDeclaration:        genExt(node);  break;
+        case ASTNodeType::VarDeclaration:        genVar(node, false); break;
+        case ASTNodeType::ConstDeclaration:      genVar(node, true);  break;
+        case ASTNodeType::StructDeclaration:     genStruct(node); break;
+        case ASTNodeType::EnumDeclaration:       genEnum(node);   break;
+        case ASTNodeType::UnionDeclaration:      genUnion(node);  break;
+        case ASTNodeType::ErrorDeclaration:      genError(node);  break;
+        default: break;
     }
 }
 
-// ── Phase 8: Function codegen ───────────────────────────────────────────────
+// ── Struct codegen ──────────────────────────────────────────────────────────
 
-void Codegen::genFuncDecl(ASTNode* node) {
+void IRGen::genStruct(ASTNode* node) {
     if (!node || !node->token) return;
     auto& name = node->token->value;
 
-    std::string ret_type = "void";
-    if (node->left && node->left->node_type == ASTNodeType::ReturnType && node->left->left)
-        ret_type = resolveType(node->left->left);
-    current_ret_type = ret_type;
+    if (types.structs.count(name)) return;
 
-    std::string sig = "define " + ret_type + " @" + name + "(";
-    if (node->middle && node->middle->children) {
-        for (size_t i = 0; i < node->middle->children->size(); i++) {
-            if (i > 0) sig += ", ";
-            auto* param = (*node->middle->children)[i];
-            if (param->node_type == ASTNodeType::Parameter) {
-                std::string ptype = param->left ? resolveType(param->left) : "i32";
-                std::string pname = param->token ? param->token->value : "arg" + std::to_string(i);
-                sig += ptype + " %" + pname;
+    std::vector<Type*> field_types;
+    std::vector<std::string> field_names;
+    struct_methods[name].clear();
+
+    if (node->children) {
+        for (auto* child : *node->children) {
+            if (child->node_type == ASTNodeType::StructField) {
+                if (child->token) field_names.push_back(child->token->value);
+                field_types.push_back(child->left ? razenType(child->left) : Type::getInt32Ty(ctx));
+            } else if (child->node_type == ASTNodeType::FunctionDeclaration) {
+                struct_methods[name].push_back(child);
             }
         }
     }
-    sig += ") {";
-    ir.emitLine(sig);
-    ir.indent_str = "    ";
 
-    if (node->middle && node->middle->children) {
-        bool is_method = !current_struct_name.empty();
-        for (size_t i = 0; i < node->middle->children->size(); i++) {
-            auto* param = (*node->middle->children)[i];
-            if (param->node_type == ASTNodeType::Parameter && param->token) {
-                auto& pname = param->token->value;
-                std::string ptype = param->left ? resolveType(param->left) : "i32";
+    auto* st = StructType::create(ctx, field_types, name);
+    types.structs[name] = st;
+}
 
-                if (is_method && (pname == "self" || i == 0)) {
-                    locals[pname] = "%" + pname;
-                    local_types[pname] = "%" + current_struct_name + "*";
+// ── Enum codegen ────────────────────────────────────────────────────────────
+
+void IRGen::genEnum(ASTNode* node) {
+    if (!node || !node->token) return;
+    auto& name = node->token->value;
+
+    Type* backing = Type::getInt32Ty(ctx);
+    if (node->left) backing = razenType(node->left);
+    enums[name].backing = backing;
+
+    int next = 0;
+    if (node->children) {
+        for (auto* child : *node->children) {
+            if (child->node_type == ASTNodeType::EnumField && child->token) {
+                int val = next;
+                if (child->right && child->right->node_type == ASTNodeType::IntegerLiteral && child->right->token) {
+                    val = std::stoi(child->right->token->value);
+                    next = val + 1;
                 } else {
-                    locals[pname] = "%" + pname + ".addr";
-                    local_types[pname] = ptype;
-                    ir.emitLine("%" + pname + ".addr = alloca " + ptype);
-                    ir.emitLine("store " + ptype + " %" + pname + ", " + ptype + "* %" + pname + ".addr");
+                    next++;
                 }
+                enums[name].values[child->token->value] = val;
+            }
+        }
+    }
+}
+
+// ── Union codegen ───────────────────────────────────────────────────────────
+
+void IRGen::genUnion(ASTNode* node) {
+    if (!node || !node->token) return;
+    auto& name = node->token->value;
+
+    int max_payload = 0;
+    std::vector<UnionVariant> variants;
+
+    if (node->children) {
+        for (size_t i = 0; i < node->children->size(); i++) {
+            auto* child = (*node->children)[i];
+            if (child->node_type != ASTNodeType::UnionField) continue;
+
+            UnionVariant vi;
+            vi.name = child->token ? child->token->value : "v" + std::to_string(i);
+            vi.tag = (int)i;
+
+            if (child->left) {
+                vi.payload_type = razenType(child->left);
+            } else if (child->children && !child->children->empty()) {
+                std::vector<Type*> fields;
+                for (auto* sf : *child->children) {
+                    fields.push_back(sf->left ? razenType(sf->left) : Type::getInt32Ty(ctx));
+                }
+                vi.payload_type = StructType::get(ctx, fields);
+            } else {
+                vi.payload_type = Type::getVoidTy(ctx);
+            }
+
+            int sz = 0;
+            if (vi.payload_type->isIntegerTy())
+                sz = cast<IntegerType>(vi.payload_type)->getBitWidth() / 8;
+            else if (vi.payload_type->isFloatingPointTy())
+                sz = vi.payload_type->getPrimitiveSizeInBits() / 8;
+            else if (vi.payload_type->isPointerTy())
+                sz = 8;
+            else if (auto* st = dyn_cast<StructType>(vi.payload_type))
+                sz = st->getNumElements() * 8;
+            else if (auto* arr = dyn_cast<ArrayType>(vi.payload_type))
+                sz = arr->getNumElements() * (arr->getElementType()->getPrimitiveSizeInBits() / 8);
+
+            if (sz > max_payload) max_payload = sz;
+            variants.push_back(vi);
+        }
+    }
+
+    unions[name] = {nullptr, max_payload, variants};
+
+    auto* ll = StructType::create(ctx, {Type::getInt32Ty(ctx), ArrayType::get(Type::getInt8Ty(ctx), max_payload)}, name);
+    types.structs[name] = ll;
+    unions[name].ll_type = ll;
+}
+
+// ── Error set codegen ───────────────────────────────────────────────────────
+
+void IRGen::genError(ASTNode* node) {
+    if (!node || !node->token) return;
+    auto& name = node->token->value;
+    int code = 0;
+    if (node->children) {
+        for (auto* child : *node->children) {
+            if (child->node_type == ASTNodeType::ErrorField && child->token) {
+                errors[name][child->token->value] = code++;
+            }
+        }
+    }
+}
+
+// ── External function declaration ───────────────────────────────────────────
+
+void IRGen::genExt(ASTNode* node) {
+    if (!node || !node->token) return;
+    auto& name = node->token->value;
+
+    Type* ret = Type::getInt32Ty(ctx);
+    if (node->left && node->left->node_type == ASTNodeType::ReturnType && node->left->left)
+        ret = resolveType(node->left->left);
+
+    std::vector<Type*> params;
+    if (node->middle && node->middle->children) {
+        for (auto* p : *node->middle->children) {
+            if (p->node_type == ASTNodeType::Parameter)
+                params.push_back(p->left ? resolveType(p->left) : Type::getInt32Ty(ctx));
+        }
+    }
+
+    auto* ft = FunctionType::get(ret, params, false);
+    module.getOrInsertFunction(name, ft);
+}
+
+// ── Function codegen ────────────────────────────────────────────────────────
+
+void IRGen::genFunc(ASTNode* node) {
+    if (!node || !node->token) return;
+    auto& name = node->token->value;
+
+    Type* ret = Type::getVoidTy(ctx);
+    if (node->left && node->left->node_type == ASTNodeType::ReturnType && node->left->left)
+        ret = resolveType(node->left->left);
+    current_ret_type = ret;
+
+    std::vector<Type*> params;
+    std::vector<std::string> param_names;
+    if (node->middle && node->middle->children) {
+        for (auto* p : *node->middle->children) {
+            if (p->node_type == ASTNodeType::Parameter) {
+                params.push_back(p->left ? resolveType(p->left) : Type::getInt32Ty(ctx));
+                param_names.push_back(p->token ? p->token->value : "arg");
             }
         }
     }
 
-    has_return_emitted = false;
-    deferred_stmts.clear();
+    auto* ft = FunctionType::get(ret, params, false);
+    auto* fn = Function::Create(ft, Function::ExternalLinkage, name, module);
+
+    named_values.clear();
+    named_types.clear();
+    deferred.clear();
+    has_return = false;
+    current_func_name = name;
+
+    auto* entry = BasicBlock::Create(ctx, "entry", fn);
+    builder.SetInsertPoint(entry);
+
+    unsigned idx = 0;
+    bool is_method = !current_struct.empty();
+    for (auto& arg : fn->args()) {
+        if (idx < param_names.size()) {
+            auto& pname = param_names[idx];
+            if (is_method && (pname == "self" || idx == 0)) {
+                named_values[pname] = builder.CreateAlloca(arg.getType(), nullptr, pname);
+                named_types[pname] = arg.getType();
+                builder.CreateStore(&arg, named_values[pname]);
+            } else {
+                createEntryBlockAlloca(fn, pname, arg.getType());
+                builder.CreateStore(&arg, named_values[pname]);
+            }
+        }
+        idx++;
+    }
+
     if (node->right && node->right->node_type == ASTNodeType::Block)
         genBlock(node->right);
 
     emitDeferred();
 
-    if (!has_return_emitted && ret_type != "void") {
-        auto t = ir.tmp("%retval");
-        ir.emitLine(t + " = alloca " + ret_type);
-        ir.emitLine("ret " + ret_type + " 0");
-    } else if (!has_return_emitted) {
-        ir.emitLine("ret void");
+    if (!has_return) {
+        if (ret->isVoidTy())
+            builder.CreateRetVoid();
+        else
+            builder.CreateRet(Constant::getNullValue(ret));
     }
 
-    ir.indent_str = "";
-    ir.emitLine("}");
-    ir.emitLine("");
-
-    locals.clear();
-    local_types.clear();
-    current_ret_type = "void";
-    deferred_stmts.clear();
+    named_values.clear();
+    named_types.clear();
+    deferred.clear();
+    current_ret_type = Type::getVoidTy(ctx);
 }
 
-// ── Phase 7: Variable declarations ──────────────────────────────────────────
+// ── Variable declaration ────────────────────────────────────────────────────
 
-void Codegen::genVarDecl(ASTNode* node) {
+void IRGen::genVar(ASTNode* node, bool is_const) {
     if (!node || !node->token) return;
     auto& name = node->token->value;
-    std::string llvm_type = node->left ? typeToLLVM(node->left) : "i32";
 
-    if (node->right && node->right->node_type == ASTNodeType::TryExpression) {
-        if (llvm_type.find("{ i1,") == 0) {
-            llvm_type = "i32";
-            size_t end = llvm_type.find_last_of(' ');
-            if (end != std::string::npos) {
-                std::string inner = llvm_type.substr(end + 1);
-                if (inner.back() == '}') inner.pop_back();
-                if (!inner.empty() && inner != "void") llvm_type = inner;
-            }
+    Type* ty = node->left ? razenType(node->left) : nullptr;
+
+    auto* current_fn = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
+    if (!current_fn) {
+        if (!ty) ty = Type::getInt32Ty(ctx);
+        auto* init_val = node->right ? genExpr(node->right) : nullptr;
+        Constant* init_const = nullptr;
+        if (init_val) {
+            if (!ty) ty = init_val->getType();
+            init_const = dyn_cast<Constant>(init_val);
+        }
+        if (!init_const) init_const = Constant::getNullValue(ty);
+        new GlobalVariable(module, ty, is_const, GlobalValue::InternalLinkage, init_const, name);
+        return;
+    }
+
+    if (node->right) {
+        auto* init = genExpr(node->right);
+        if (init) {
+            if (!ty) ty = init->getType();
+            if (!ty) ty = Type::getInt32Ty(ctx);
+            createEntryBlockAlloca(current_fn, name, ty);
+            builder.CreateStore(init, named_values[name]);
+            return;
         }
     }
 
-    std::string reg = "%" + name + ".addr";
-    locals[name] = reg;
-    local_types[name] = llvm_type;
+    if (!ty) ty = Type::getInt32Ty(ctx);
+    createEntryBlockAlloca(current_fn, name, ty);
 
-    ir.emitLine(reg + " = alloca " + llvm_type);
-
-    if (node->right) {
-        std::string val;
-        if (node->right->node_type == ASTNodeType::TryExpression) {
-            val = genTryExpression(node->right);
-        } else {
-            val = genExpr(node->right);
-        }
-        std::string val_type = llvm_type;
-        auto space = val.find(' ');
-        if (space != std::string::npos) val_type = val.substr(0, space);
-        ir.emitLine("store " + val + ", " + val_type + "* " + reg);
+    if (!is_const && !node->right) {
+        builder.CreateStore(Constant::getNullValue(ty), named_values[name]);
     }
 }
 
 // ── Block ───────────────────────────────────────────────────────────────────
 
-void Codegen::genBlock(ASTNode* node) {
-    if (!node) return;
-    if (node->children) {
-        for (auto* child : *node->children) {
-            genNode(child);
-        }
+void IRGen::genBlock(ASTNode* node) {
+    if (!node || !node->children) return;
+    for (auto* child : *node->children) {
+        if (has_return) break;
+        genNode(child);
     }
 }
 
 // ── Return ──────────────────────────────────────────────────────────────────
 
-void Codegen::genReturn(ASTNode* node) {
+void IRGen::genReturn(ASTNode* node) {
     if (!node) return;
     emitDeferred();
-    has_return_emitted = true;
+    has_return = true;
 
     if (node->left) {
-        // Check if returning error variant (FileError.NotFound)
-        std::string err_set;
-        int err_code;
-        if (isErrorVariant(node->left, &err_set, &err_code)) {
-            // Construct error union: { i1 1, i32 code }
-            auto tmp = ir.tmp("%err_ret");
-            ir.emitLine(tmp + " = alloca " + current_ret_type);
-            auto fg = ir.tmp("%efg");
-            ir.emitLine(fg + " = getelementptr inbounds " + current_ret_type + ", " +
-                        current_ret_type + "* " + tmp + ", i32 0, i32 0");
-            ir.emitLine("store i1 1, i1* " + fg);
-            auto cg = ir.tmp("%ecg");
-            ir.emitLine(cg + " = getelementptr inbounds " + current_ret_type + ", " +
-                        current_ret_type + "* " + tmp + ", i32 0, i32 1");
-            ir.emitLine("store i32 " + std::to_string(err_code) + ", i32* " + cg);
-            auto l = ir.tmp("%el");
-            ir.emitLine(l + " = load " + current_ret_type + ", " + current_ret_type + "* " + tmp);
-            ir.emitLine("ret " + current_ret_type + " " + l);
+        auto* val = genExpr(node->left);
+        if (val && current_ret_type) {
+            if (val->getType() != current_ret_type) {
+                if (isIntTy(val->getType()) && isIntTy(current_ret_type)) {
+                    unsigned w1 = cast<IntegerType>(val->getType())->getBitWidth();
+                    unsigned w2 = cast<IntegerType>(current_ret_type)->getBitWidth();
+                    if (w1 < w2) val = builder.CreateSExt(val, current_ret_type);
+                    else if (w1 > w2) val = builder.CreateTrunc(val, current_ret_type);
+                } else {
+                    val = Constant::getNullValue(current_ret_type);
+                }
+            }
+            builder.CreateRet(val);
             return;
         }
-
-        auto val = genExpr(node->left);
-        auto space = val.find(' ');
-        std::string ty = space != std::string::npos ? val.substr(0, space) : "i32";
-        ir.emitLine("ret " + val);
-    } else {
-        ir.emitLine("ret void");
     }
+    builder.CreateRetVoid();
 }
 
-// ── If/else ─────────────────────────────────────────────────────────────────
+// ── If / else ───────────────────────────────────────────────────────────────
 
-void Codegen::genIf(ASTNode* node) {
+void IRGen::genIf(ASTNode* node) {
     if (!node) return;
-    auto cond_reg = node->left ? genExpr(node->left) : "i1 0";
-    auto label_then = ir.label(".if.then");
-    auto label_else = ir.label(".if.else");
-    auto label_end = ir.label(".if.end");
 
-    ir.emitLine("br " + cond_reg + ", label %" + label_then + ", label %" + label_else);
-    ir.emitLine("");
-    ir.emitLine(label_then + ":");
-    if (node->middle) genNode(node->middle);
-    if (!has_return_emitted) ir.emitLine("br label %" + label_end);
-    ir.emitLine("");
+    auto* fn = builder.GetInsertBlock()->getParent();
+    auto* thenBB = BasicBlock::Create(ctx, "if.then", fn);
+    auto* elseBB = BasicBlock::Create(ctx, "if.else", fn);
+    auto* endBB  = BasicBlock::Create(ctx, "if.end", fn);
 
-    ir.emitLine(label_else + ":");
+    auto* cond = node->left ? genExpr(node->left) : ConstantInt::getFalse(ctx);
+    if (!cond) cond = ConstantInt::getFalse(ctx);
+    if (cond->getType()->isIntegerTy() && cast<IntegerType>(cond->getType())->getBitWidth() != 1)
+        cond = builder.CreateICmpNE(cond, ConstantInt::get(cond->getType(), 0), "if.cond");
+    builder.CreateCondBr(cond, thenBB, elseBB);
+
+    builder.SetInsertPoint(thenBB);
+    bool then_ret = false;
+    if (node->middle) {
+        bool prev = has_return; has_return = false;
+        genNode(node->middle);
+        then_ret = has_return;
+        has_return = prev;
+    }
+    if (!then_ret) builder.CreateBr(endBB);
+
+    builder.SetInsertPoint(elseBB);
+    bool else_ret = false;
     if (node->right) {
+        bool prev = has_return; has_return = false;
         if (node->right->node_type == ASTNodeType::ElseIfStatement)
             genIf(node->right);
         else
             genNode(node->right);
+        else_ret = has_return;
+        has_return = prev;
     }
-    if (!has_return_emitted) ir.emitLine("br label %" + label_end);
-    ir.emitLine("");
+    if (!else_ret) builder.CreateBr(endBB);
 
-    ir.emitLine(label_end + ":");
+    builder.SetInsertPoint(endBB);
 }
 
 // ── Loop ────────────────────────────────────────────────────────────────────
 
-void Codegen::genLoop(ASTNode* node) {
-    auto label_cond = ir.label(".loop.cond");
-    auto label_body = ir.label(".loop.body");
-    auto label_end = ir.label(".loop.end");
-    auto label_cont = ir.label(".loop.continue");
+void IRGen::genLoop(ASTNode* node) {
+    auto* fn = builder.GetInsertBlock()->getParent();
+    auto* condBB = BasicBlock::Create(ctx, "loop.cond", fn);
+    auto* bodyBB = BasicBlock::Create(ctx, "loop.body", fn);
+    auto* endBB  = BasicBlock::Create(ctx, "loop.end", fn);
 
-    ir.emitLine("br label %" + label_cond);
-    ir.emitLine("");
-    ir.emitLine(label_cond + ":");
+    auto* prev_cont = loop_continue;
+    auto* prev_end  = loop_end;
+    loop_continue = condBB;
+    loop_end = endBB;
+
+    builder.CreateBr(condBB);
+    builder.SetInsertPoint(condBB);
+
     if (node->left) {
-        auto cond = genExpr(node->left);
-        ir.emitLine("br " + cond + ", label %" + label_body + ", label %" + label_end);
+        auto* cond = genExpr(node->left);
+        if (!cond) cond = ConstantInt::getTrue(ctx);
+        if (cond->getType()->isIntegerTy() && cast<IntegerType>(cond->getType())->getBitWidth() != 1)
+            cond = builder.CreateICmpNE(cond, ConstantInt::get(cond->getType(), 0), "loop.cond");
+        else if (!cond->getType()->isIntegerTy(1))
+            cond = ConstantInt::getTrue(ctx);
+        builder.CreateCondBr(cond, bodyBB, endBB);
     } else {
-        ir.emitLine("br label %" + label_body);
+        builder.CreateBr(bodyBB);
     }
-    ir.emitLine("");
-    ir.emitLine(label_body + ":");
+
+    builder.SetInsertPoint(bodyBB);
     if (node->right) genNode(node->right);
-    ir.emitLine("br label %" + label_cont);
-    ir.emitLine("");
-    ir.emitLine(label_cont + ":");
-    ir.emitLine("br label %" + label_cond);
-    ir.emitLine("");
-    ir.emitLine(label_end + ":");
+    if (!has_return) builder.CreateBr(loop_continue);
+
+    builder.SetInsertPoint(endBB);
+    loop_continue = prev_cont;
+    loop_end = prev_end;
 }
 
-// ── Assignment ───────────────────────────────────────────────────────────────
+// ── Assignment ──────────────────────────────────────────────────────────────
 
-void Codegen::genAssign(ASTNode* node) {
+void IRGen::genAssign(ASTNode* node) {
     if (!node || !node->left || !node->token) return;
     auto* lhs = node->left;
     auto tok_type = node->token->type;
-    bool is_compound = (tok_type == TokenType::PlusEquals ||
-                        tok_type == TokenType::MinusEquals ||
-                        tok_type == TokenType::StarEquals ||
-                        tok_type == TokenType::SlashEquals ||
-                        tok_type == TokenType::PercentEquals);
 
-    // Helper: emit store to address
-    auto emitStore = [&](const std::string& ptr, const std::string& ptr_type, const std::string& val_str) {
-        if (is_compound) {
-            auto load = ir.tmp("%load");
-            ir.emitLine(load + " = load " + ptr_type + ", " + ptr_type + "* " + ptr);
-            auto rhs = genExpr(node->right);
-            std::string rt, rr;
-            auto sp = rhs.find(' ');
-            if (sp != std::string::npos) { rt = rhs.substr(0, sp); rr = rhs.substr(sp + 1); }
-            else { rt = ptr_type; rr = rhs; }
-            auto bin = ir.tmp("%bin");
+    bool compound = (tok_type == TokenType::PlusEquals ||
+                     tok_type == TokenType::MinusEquals ||
+                     tok_type == TokenType::StarEquals ||
+                     tok_type == TokenType::SlashEquals ||
+                     tok_type == TokenType::PercentEquals);
+
+    auto doStore = [&](Value* ptr, Type* ty) {
+        if (compound) {
+            auto* loaded = builder.CreateLoad(ty, ptr, "load");
+            auto* rhs = genExpr(node->right);
+            if (!rhs) return;
+            Type* rt = rhs->getType();
+            Value* result = nullptr;
+
+            auto isFloat = [](Type* t) { return t->isHalfTy() || t->isFloatTy() || t->isDoubleTy() || t->isFP128Ty(); };
+            bool fl = isFloat(ty);
+
             switch (tok_type) {
                 case TokenType::PlusEquals:
-                    if (ptr_type == "double" || ptr_type == "float" || ptr_type == "fp128" || ptr_type == "half")
-                        ir.emitLine(bin + " = fadd " + ptr_type + " " + load + ", " + rr);
-                    else
-                        ir.emitLine(bin + " = add " + ptr_type + " " + load + ", " + rr);
+                    result = fl ? builder.CreateFAdd(loaded, rhs) : builder.CreateAdd(loaded, rhs);
                     break;
                 case TokenType::MinusEquals:
-                    if (ptr_type == "double" || ptr_type == "float" || ptr_type == "fp128" || ptr_type == "half")
-                        ir.emitLine(bin + " = fsub " + ptr_type + " " + load + ", " + rr);
-                    else
-                        ir.emitLine(bin + " = sub " + ptr_type + " " + load + ", " + rr);
+                    result = fl ? builder.CreateFSub(loaded, rhs) : builder.CreateSub(loaded, rhs);
                     break;
                 case TokenType::StarEquals:
-                    if (ptr_type == "double" || ptr_type == "float" || ptr_type == "fp128" || ptr_type == "half")
-                        ir.emitLine(bin + " = fmul " + ptr_type + " " + load + ", " + rr);
-                    else
-                        ir.emitLine(bin + " = mul " + ptr_type + " " + load + ", " + rr);
+                    result = fl ? builder.CreateFMul(loaded, rhs) : builder.CreateMul(loaded, rhs);
                     break;
                 case TokenType::SlashEquals:
-                    if (ptr_type == "double" || ptr_type == "float" || ptr_type == "fp128" || ptr_type == "half")
-                        ir.emitLine(bin + " = fdiv " + ptr_type + " " + load + ", " + rr);
-                    else
-                        ir.emitLine(bin + " = sdiv " + ptr_type + " " + load + ", " + rr);
+                    result = fl ? builder.CreateFDiv(loaded, rhs) : builder.CreateSDiv(loaded, rhs);
                     break;
                 case TokenType::PercentEquals:
-                    ir.emitLine(bin + " = srem " + ptr_type + " " + load + ", " + rr);
+                    result = builder.CreateSRem(loaded, rhs);
                     break;
-                default: break;
+                default: return;
             }
-            ir.emitLine("store " + ptr_type + " " + bin + ", " + ptr_type + "* " + ptr);
+            builder.CreateStore(result, ptr);
         } else {
-            auto val = genExpr(node->right);
-            ir.emitLine("store " + val + ", " + ptr_type + "* " + ptr);
+            auto* rhs = genExpr(node->right);
+            if (rhs) builder.CreateStore(rhs, ptr);
         }
     };
 
-    // Case 1: x = expr (simple identifier)
     if (lhs->node_type == ASTNodeType::Identifier && lhs->token) {
         auto& name = lhs->token->value;
-        auto it = locals.find(name);
-        if (it != locals.end()) {
-            std::string val_type = local_types[name];
-            if (is_compound) {
-                emitStore(it->second, val_type, "");
-            } else {
-                auto val = node->right ? genExpr(node->right) : val_type + " 0";
-                ir.emitLine("store " + val + ", " + val_type + "* " + it->second);
-            }
-        }
+        auto it = named_values.find(name);
+        if (it != named_values.end())
+            doStore(it->second, named_types[name]);
         return;
     }
 
-    // Case 2: x.field = expr or x.field += expr (member access)
     if (lhs->node_type == ASTNodeType::MemberAccess) {
-        // Evaluate the LHS to get the field pointer, then store
-        // For member access as LHS, we need the GEP pointer
-        auto* ma = lhs;
-        if (ma->left && ma->left->node_type == ASTNodeType::Identifier && ma->left->token) {
-            auto& var_name = ma->left->token->value;
-            auto it = locals.find(var_name);
-            if (it != locals.end()) {
-                auto& llvm_type = local_types[var_name];
-                std::string struct_name = llvm_type;
-                if (!struct_name.empty() && struct_name[0] == '%')
-                    struct_name = struct_name.substr(1);
-
-                std::string field_name;
-                if (ma->right && ma->right->token)
-                    field_name = ma->right->token->value;
-
-                int field_index = 0;
-                auto sit = struct_types.find(struct_name);
-                if (sit != struct_types.end()) {
-                    for (size_t i = 0; i < sit->second.size(); i++) {
-                        if (sit->second[i] == field_name) { field_index = i; break; }
+        if (lhs->left && lhs->left->node_type == ASTNodeType::Identifier && lhs->left->token) {
+            auto& var = lhs->left->token->value;
+            auto it = named_values.find(var);
+            if (it != named_values.end()) {
+                auto* st_ty = named_types[var];
+                std::string sname;
+                // name is known from context: struct name = var_name if we stored it, or from struct_methods
+                for (auto& [sn, _] : types.structs) {
+                    if (st_ty == types.structs[sn] ||
+                        (st_ty->isPointerTy() && current_struct == sn)) {
+                        sname = sn;
+                        break;
                     }
                 }
 
-                std::string field_llvm_type = "i32";
-                auto ftit = struct_field_types.find(struct_name);
-                if (ftit != struct_field_types.end()) {
-                    auto fit = ftit->second.find(field_name);
-                    if (fit != ftit->second.end()) field_llvm_type = fit->second;
+                std::string fname;
+                if (lhs->right && lhs->right->token) fname = lhs->right->token->value;
+
+                // get the struct type and field index
+                auto sit = types.structs.find(sname);
+                if (sit == types.structs.end()) return;
+                auto* st = sit->second;
+                unsigned fidx = 0;
+                for (unsigned i = 0; i < st->getNumElements(); i++) {
+                    fidx = i;
+                    break;
                 }
 
-                auto gep = ir.tmp("%lhs_gep");
-                ir.emitLine(gep + " = getelementptr inbounds " + llvm_type + ", " +
-                            llvm_type + "* " + it->second + ", i32 0, i32 " +
-                            std::to_string(field_index));
+                Value* ptr = it->second;
+                Type* base_ty = st;
+                if (st_ty->isPointerTy()) {
+                    // Load the pointer value and create alloca for it
+                    auto* loaded_ptr = builder.CreateLoad(st_ty, ptr);
+                    auto* tmp = builder.CreateAlloca(st);
+                    builder.CreateStore(loaded_ptr, tmp);
+                    ptr = tmp;
+                    base_ty = st;
+                }
 
-                emitStore(gep, field_llvm_type, "");
+                auto* gep = builder.CreateStructGEP(base_ty, ptr, fidx, "field");
+                Type* fty = st->getElementType(fidx);
+
+                doStore(gep, fty);
             }
         }
     }
 }
 
+
 // ── Match ───────────────────────────────────────────────────────────────────
 
-void Codegen::genMatch(ASTNode* node) {
-    if (!node) return;
-    auto match_val = node->left ? genExpr(node->left) : "i32 0";
-    auto label_end = ir.label(".match.end");
+void IRGen::genMatch(ASTNode* node) {
+    if (!node || !node->children || node->children->empty()) return;
 
-    auto extractReg = [](const std::string& s) -> std::string {
-        auto sp = s.find(' ');
-        if (sp != std::string::npos) return s.substr(sp + 1);
-        return s;
-    };
+    auto* fn = builder.GetInsertBlock()->getParent();
+    auto* endBB = BasicBlock::Create(ctx, "match.end", fn);
 
-    std::string match_reg = extractReg(match_val);
-    auto space = match_val.find(' ');
-    std::string match_type = space != std::string::npos ? match_val.substr(0, space) : "i32";
+    auto* match_val = genExpr(node->left);
+    if (!match_val) { builder.CreateBr(endBB); builder.SetInsertPoint(endBB); return; }
 
-    if (!node->children || node->children->empty()) {
-        ir.emitLine("br label %" + label_end);
-        ir.emitLine("");
-        ir.emitLine(label_end + ":");
-        return;
-    }
+    Type* match_ty = match_val->getType();
+    std::string match_sname;
+    if (auto* st = dyn_cast<StructType>(match_ty))
+        match_sname = st->getName().str();
 
-    // Separate patterned cases from default case, detect union patterns
-    std::vector<ASTNode*> pattern_cases;
-    std::vector<std::pair<std::string, int>> union_case_info; // (union_name, tag)
     ASTNode* else_case = nullptr;
-    bool has_union_cases = false;
+    std::vector<ASTNode*> cases;
+    for (auto* c : *node->children) {
+        if (!c->left) { else_case = c; continue; }
+        cases.push_back(c);
+    }
 
-    for (auto* case_node : *node->children) {
-        if (!case_node->left) {
-            else_case = case_node;
-            continue;
-        }
-        // Check for union pattern: MemberAccess(Identifier("UnionName"), FunctionCall("Variant"))
-        if (case_node->left->node_type == ASTNodeType::MemberAccess &&
-            case_node->left->left && case_node->left->right &&
-            case_node->left->right->node_type == ASTNodeType::FunctionCall &&
-            case_node->left->left->token &&
-            union_variants.count(case_node->left->left->token->value)) {
-            has_union_cases = true;
-            std::string uname = case_node->left->left->token->value;
-            std::string vname = case_node->left->right->token->value;
-            int tag = 0;
-            for (auto& vi : union_variants[uname]) {
-                if (vi.name == vname) { tag = vi.tag; break; }
+    bool is_union_match = !match_sname.empty() && unions.count(match_sname);
+
+    if (is_union_match) {
+        auto* ptr = builder.CreateAlloca(match_ty);
+        builder.CreateStore(match_val, ptr);
+        auto* tag_ptr = builder.CreateStructGEP(match_ty, ptr, 0, "tag.ptr");
+        auto* tag = builder.CreateLoad(Type::getInt32Ty(ctx), tag_ptr, "tag");
+
+        BasicBlock* currentBB = nullptr;
+        for (size_t i = 0; i < cases.size(); i++) {
+            auto* caseBB = BasicBlock::Create(ctx, "match.case", fn);
+            auto* nextBB = (i == cases.size() - 1 && else_case)
+                ? BasicBlock::Create(ctx, "match.else", fn)
+                : (i == cases.size() - 1 ? endBB : BasicBlock::Create(ctx, "match.next", fn));
+
+            if (!currentBB) {
+                auto* checkBB = BasicBlock::Create(ctx, "match.check", fn);
+                builder.CreateBr(checkBB);
+                builder.SetInsertPoint(checkBB);
+                currentBB = checkBB;
             }
-            union_case_info.push_back({uname, tag});
-            pattern_cases.push_back(case_node);
-        } else {
-            union_case_info.push_back({"", -1});
-            pattern_cases.push_back(case_node);
-        }
-    }
 
-    if (pattern_cases.empty()) {
-        if (else_case && else_case->right) genNode(else_case->right);
-        ir.emitLine("br label %" + label_end);
-        ir.emitLine("");
-        ir.emitLine(label_end + ":");
-        return;
-    }
+            builder.SetInsertPoint(currentBB);
+            int expected = unions[match_sname].variants[i].tag;
+            auto* cmp = builder.CreateICmpEQ(tag, ConstantInt::get(Type::getInt32Ty(ctx), expected));
+            builder.CreateCondBr(cmp, caseBB, nextBB);
 
-    // ── Union match path ──
-    if (has_union_cases) {
-        std::string uname;
-        for (auto& uci : union_case_info) {
-            if (!uci.first.empty()) { uname = uci.first; break; }
-        }
+            builder.SetInsertPoint(caseBB);
+            auto& vi = unions[match_sname].variants[i];
+            if (vi.payload_type && !vi.payload_type->isVoidTy()) {
+                auto* payload_ptr = builder.CreateStructGEP(match_ty, ptr, 1, "payload.ptr");
+                auto* casted = builder.CreateBitCast(payload_ptr, PointerType::getUnqual(vi.payload_type));
+                auto* payload = builder.CreateLoad(vi.payload_type, casted, "payload");
 
-        // Alloca the union value
-        auto match_ptr = ir.tmp("%match.ptr");
-        ir.emitLine(match_ptr + " = alloca " + match_type);
-        ir.emitLine("store " + match_val + ", " + match_type + "* " + match_ptr);
-
-        // Extract tag
-        auto tag_gep = ir.tmp("%tag.gep");
-        ir.emitLine(tag_gep + " = getelementptr inbounds " + match_type + ", " +
-                    match_type + "* " + match_ptr + ", i32 0, i32 0");
-        auto tag = ir.tmp("%tag");
-        ir.emitLine(tag + " = load i32, i32* " + tag_gep);
-
-        auto first_check = ir.label(".match.check");
-        ir.emitLine("br label %" + first_check);
-        ir.emitLine("");
-
-        std::string current_label = first_check;
-
-        for (size_t i = 0; i < pattern_cases.size(); i++) {
-            auto* case_node = pattern_cases[i];
-            auto& uci = union_case_info[i];
-            int expected_tag = uci.second;
-
-            ir.emitLine(current_label + ":");
-
-            auto case_label = ir.label(".match.case");
-            bool is_last = (i == pattern_cases.size() - 1);
-            std::string fallthrough;
-            if (is_last && else_case)
-                fallthrough = ir.label(".match.else");
-            else if (is_last)
-                fallthrough = label_end;
-            else
-                fallthrough = ir.label(".match.next");
-
-            auto ic = ir.tmp("%mcmp");
-            ir.emitLine(ic + " = icmp eq i32 " + tag + ", " + std::to_string(expected_tag));
-            ir.emitLine("br i1 " + ic + ", label %" + case_label + ", label %" + fallthrough);
-            ir.emitLine("");
-            ir.emitLine(case_label + ":");
-
-            // For union cases, extract payload and bind variable
-            if (uci.first == uname && expected_tag >= 0) {
-                auto& variants = union_variants[uname];
-                if ((size_t)expected_tag < variants.size()) {
-                    auto& vi = variants[expected_tag];
-                    auto payload_gep = ir.tmp("%pgep");
-                    int psize = union_payload_sizes[uname];
-                    ir.emitLine(payload_gep + " = getelementptr inbounds " + match_type + ", " +
-                                match_type + "* " + match_ptr + ", i32 0, i32 1");
-                    auto pc = ir.tmp("%pcast");
-                    ir.emitLine(pc + " = bitcast [" + std::to_string(psize) + " x i8]* " +
-                                payload_gep + " to " + vi.payload_type + "*");
-
-                    // Bind variable from match pattern: Value.Int(v)
-                    if (case_node->left->right->children && !case_node->left->right->children->empty()) {
-                        auto* arg = (*case_node->left->right->children)[0];
-                        if (arg->left && arg->left->node_type == ASTNodeType::Identifier && arg->left->token) {
-                            auto& vname = arg->left->token->value;
-                            auto vaddr = ir.tmp("%" + vname + ".addr");
-                            ir.emitLine(vaddr + " = alloca " + vi.payload_type);
-                            auto pv = ir.tmp("%pv");
-                            ir.emitLine(pv + " = load " + vi.payload_type + ", " +
-                                        vi.payload_type + "* " + pc);
-                            ir.emitLine("store " + vi.payload_type + " " + pv + ", " +
-                                        vi.payload_type + "* " + vaddr);
-                            locals[vname] = vaddr;
-                            local_types[vname] = vi.payload_type;
-                        }
+                if (cases[i]->left->right && cases[i]->left->right->children &&
+                    !cases[i]->left->right->children->empty()) {
+                    auto* arg = (*cases[i]->left->right->children)[0];
+                    if (arg->left && arg->left->node_type == ASTNodeType::Identifier && arg->left->token) {
+                        auto* alloc = builder.CreateAlloca(vi.payload_type);
+                        builder.CreateStore(payload, alloc);
+                        named_values[arg->left->token->value] = alloc;
+                        named_types[arg->left->token->value] = vi.payload_type;
                     }
                 }
             }
 
-            if (case_node->right) genNode(case_node->right);
-            ir.emitLine("br label %" + label_end);
-            ir.emitLine("");
-            current_label = fallthrough;
+            if (cases[i]->right) genNode(cases[i]->right);
+            if (!has_return) builder.CreateBr(endBB);
+            currentBB = nextBB;
         }
 
         if (else_case) {
-            ir.emitLine(current_label + ":");
+            builder.SetInsertPoint(currentBB);
             if (else_case->right) genNode(else_case->right);
-            ir.emitLine("br label %" + label_end);
-            ir.emitLine("");
+            if (!has_return) builder.CreateBr(endBB);
+        }
+    } else {
+        BasicBlock* currentBB = nullptr;
+        for (size_t i = 0; i < cases.size(); i++) {
+            auto* caseBB = BasicBlock::Create(ctx, "match.case", fn);
+            auto* nextBB = (i == cases.size() - 1 && else_case)
+                ? BasicBlock::Create(ctx, "match.else", fn)
+                : (i == cases.size() - 1 ? endBB : BasicBlock::Create(ctx, "match.next", fn));
+
+            if (!currentBB) {
+                auto* checkBB = BasicBlock::Create(ctx, "match.check", fn);
+                builder.CreateBr(checkBB);
+                builder.SetInsertPoint(checkBB);
+                currentBB = checkBB;
+            }
+
+            builder.SetInsertPoint(currentBB);
+            auto* case_val = genExpr(cases[i]->left);
+            if (!case_val) case_val = ConstantInt::get(Type::getInt32Ty(ctx), 0);
+            auto* cmp = builder.CreateICmpEQ(match_val, case_val);
+            builder.CreateCondBr(cmp, caseBB, nextBB);
+
+            builder.SetInsertPoint(caseBB);
+            if (cases[i]->right) genNode(cases[i]->right);
+            if (!has_return) builder.CreateBr(endBB);
+            currentBB = nextBB;
         }
 
-        ir.emitLine(label_end + ":");
-        return;
+        if (else_case) {
+            builder.SetInsertPoint(currentBB);
+            if (else_case->right) genNode(else_case->right);
+            if (!has_return) builder.CreateBr(endBB);
+        }
     }
 
-    // ── Simple (non-union) match path ──
-    auto first_check = ir.label(".match.check");
-    ir.emitLine("br label %" + first_check);
-    ir.emitLine("");
+    builder.SetInsertPoint(endBB);
+}
 
-    std::string current_label = first_check;
+// ── Deferred flush ──────────────────────────────────────────────────────────
 
-    for (size_t i = 0; i < pattern_cases.size(); i++) {
-        auto* case_node = pattern_cases[i];
-
-        ir.emitLine(current_label + ":");
-
-        auto case_val = genExpr(case_node->left);
-        std::string case_reg = extractReg(case_val);
-        auto case_label = ir.label(".match.case");
-
-        bool is_last = (i == pattern_cases.size() - 1);
-        std::string fallthrough;
-        if (is_last && else_case)
-            fallthrough = ir.label(".match.else");
-        else if (is_last)
-            fallthrough = label_end;
-        else
-            fallthrough = ir.label(".match.next");
-
-        auto ic = ir.tmp("%mcmp");
-        ir.emitLine(ic + " = icmp eq " + match_type + " " + match_reg + ", " + case_reg);
-        ir.emitLine("br i1 " + ic + ", label %" + case_label + ", label %" + fallthrough);
-        ir.emitLine("");
-        ir.emitLine(case_label + ":");
-        if (case_node->right) genNode(case_node->right);
-        ir.emitLine("br label %" + label_end);
-        ir.emitLine("");
-
-        current_label = fallthrough;
+void IRGen::emitDeferred() {
+    for (auto it = deferred.rbegin(); it != deferred.rend(); ++it) {
+        genNode(*it);
     }
-
-    if (else_case) {
-        ir.emitLine(current_label + ":");
-        if (else_case->right) genNode(else_case->right);
-        ir.emitLine("br label %" + label_end);
-        ir.emitLine("");
-    }
-
-    ir.emitLine(label_end + ":");
+    deferred.clear();
 }
 
 // ── Expression dispatch ─────────────────────────────────────────────────────
 
-std::string Codegen::genExpr(ASTNode* node) {
-    if (!node) return "i32 0";
+Value* IRGen::genNode(ASTNode* node) {
+    if (!node) return nullptr;
+    switch (node->node_type) {
+        case ASTNodeType::VarDeclaration:
+        case ASTNodeType::ConstDeclaration:
+            genVar(node, node->node_type == ASTNodeType::ConstDeclaration);
+            return nullptr;
+        case ASTNodeType::ReturnStatement:  genReturn(node); return nullptr;
+        case ASTNodeType::Assignment:       genAssign(node); return nullptr;
+        case ASTNodeType::BreakStatement:
+            if (loop_end) builder.CreateBr(loop_end);
+            return nullptr;
+        case ASTNodeType::SkipStatement:
+            if (loop_continue) builder.CreateBr(loop_continue);
+            return nullptr;
+        case ASTNodeType::DeferStatement:
+            if (node->left) deferred.push_back(node->left);
+            return nullptr;
+        case ASTNodeType::IfStatement:
+        case ASTNodeType::ElseIfStatement:
+            genIf(node); return nullptr;
+        case ASTNodeType::LoopStatement:    genLoop(node); return nullptr;
+        case ASTNodeType::MatchStatement:   genMatch(node); return nullptr;
+        case ASTNodeType::Block:            genBlock(node); return nullptr;
+        case ASTNodeType::TryBlock:
+        case ASTNodeType::TryExpression:
+            return genTryExpr(node);
+        case ASTNodeType::CatchExpression:
+            if (node->left) return genNode(node->left);
+            return nullptr;
+        default:
+            return genExpr(node);
+    }
+}
+
+Value* IRGen::genExpr(ASTNode* node) {
+    if (!node) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
     switch (node->node_type) {
         case ASTNodeType::IntegerLiteral:
         case ASTNodeType::FloatLiteral:
@@ -734,314 +767,133 @@ std::string Codegen::genExpr(ASTNode* node) {
         case ASTNodeType::CharLiteral:
         case ASTNodeType::StringLiteral:
             return genLiteral(node);
-        case ASTNodeType::Identifier:
-            return genIdentifier(node);
-        case ASTNodeType::BinaryExpression:
-            return genBinary(node);
-        case ASTNodeType::UnaryExpression:
-            return genUnary(node);
-        case ASTNodeType::FunctionCall:
-            return genCall(node);
-        case ASTNodeType::MemberAccess:
-            return genMemberAccess(node);
-        case ASTNodeType::TryExpression:
-            return genTryExpression(node);
-        case ASTNodeType::ArrayLiteral:
-            return genArrayLiteral(node);
-        case ASTNodeType::TupleLiteral:
-            return genTupleLiteral(node);
-        case ASTNodeType::RangeExpression:
-            return genRangeLiteral(node);
-        default:
-            return "i32 0";
+        case ASTNodeType::Identifier:       return genIdentifier(node);
+        case ASTNodeType::BinaryExpression: return genBinary(node);
+        case ASTNodeType::UnaryExpression:  return genUnary(node);
+        case ASTNodeType::FunctionCall:     return genCall(node);
+        case ASTNodeType::MemberAccess:     return genMemberAccess(node);
+        case ASTNodeType::ArrayLiteral:     return genArrayLiteral(node);
+        case ASTNodeType::TupleLiteral:     return genTupleLiteral(node);
+        case ASTNodeType::RangeExpression:  return genRangeLiteral(node);
+        default:                            return ConstantInt::get(Type::getInt32Ty(ctx), 0);
     }
 }
 
-std::string Codegen::genArrayLiteral(ASTNode* node) {
-    if (!node || !node->children || node->children->empty()) return "[0 x i32] zeroinitializer";
-    std::string elem_type = "i32";
-    auto first_val = genExpr((*node->children)[0]);
-    auto sp = first_val.find(' ');
-    if (sp != std::string::npos) elem_type = first_val.substr(0, sp);
+// ── Literals ────────────────────────────────────────────────────────────────
 
-    size_t n = node->children->size();
-    std::string arr_type = "[" + std::to_string(n) + " x " + elem_type + "]";
-    auto arr_reg = ir.tmp("%arr");
-    ir.emitLine(arr_reg + " = alloca " + arr_type);
-
-    for (size_t i = 0; i < n; i++) {
-        auto* child = (*node->children)[i];
-        // Re-evaluate each child for proper type
-        auto val = genExpr(child);
-        auto sp2 = val.find(' ');
-        std::string val_type = sp2 != std::string::npos ? val.substr(0, sp2) : elem_type;
-        std::string val_reg = sp2 != std::string::npos ? val.substr(sp2 + 1) : val;
-        auto gep = ir.tmp("%gep");
-        ir.emitLine(gep + " = getelementptr inbounds " + arr_type + ", " +
-                    arr_type + "* " + arr_reg + ", i32 0, i32 " + std::to_string(i));
-        ir.emitLine("store " + val_type + " " + val_reg + ", " + val_type + "* " + gep);
-    }
-
-    auto load = ir.tmp("%arrload");
-    ir.emitLine(load + " = load " + arr_type + ", " + arr_type + "* " + arr_reg);
-    return arr_type + " " + load;
-}
-
-std::string Codegen::genTupleLiteral(ASTNode* node) {
-    if (!node || !node->children || node->children->empty()) return "{ i32 } zeroinitializer";
-
-    std::string struct_type = "{";
-    for (size_t i = 0; i < node->children->size(); i++) {
-        if (i > 0) struct_type += ",";
-        auto* child = (*node->children)[i];
-        auto val = genExpr(child);
-        auto sp = val.find(' ');
-        std::string ty = sp != std::string::npos ? val.substr(0, sp) : "i32";
-        struct_type += " " + ty;
-    }
-    struct_type += " }";
-
-    auto reg = ir.tmp("%tup");
-    ir.emitLine(reg + " = alloca " + struct_type);
-
-    for (size_t i = 0; i < node->children->size(); i++) {
-        auto* child = (*node->children)[i];
-        auto val = genExpr(child);
-        auto sp = val.find(' ');
-        std::string ty = sp != std::string::npos ? val.substr(0, sp) : "i32";
-        std::string reg_val = sp != std::string::npos ? val.substr(sp + 1) : val;
-        auto gep = ir.tmp("%gep");
-        ir.emitLine(gep + " = getelementptr inbounds " + struct_type + ", " +
-                    struct_type + "* " + reg + ", i32 0, i32 " + std::to_string(i));
-        ir.emitLine("store " + ty + " " + reg_val + ", " + ty + "* " + gep);
-    }
-
-    auto load = ir.tmp("%tupload");
-    ir.emitLine(load + " = load " + struct_type + ", " + struct_type + "* " + reg);
-    return struct_type + " " + load;
-}
-
-std::string Codegen::genRangeLiteral(ASTNode* node) {
-    auto left = node->left ? genExpr(node->left) : "i32 0";
-    auto right = node->right ? genExpr(node->right) : "i32 0";
-    auto sp_l = left.find(' ');
-    auto sp_r = right.find(' ');
-    std::string lt = sp_l != std::string::npos ? left.substr(0, sp_l) : "i32";
-    std::string lr = sp_l != std::string::npos ? left.substr(sp_l + 1) : left;
-    std::string rt = sp_r != std::string::npos ? right.substr(0, sp_r) : "i32";
-    std::string rr = sp_r != std::string::npos ? right.substr(sp_r + 1) : right;
-
-    std::string range_type = "{ " + lt + ", " + rt + " }";
-    auto reg = ir.tmp("%range");
-    ir.emitLine(reg + " = alloca " + range_type);
-
-    auto g0 = ir.tmp("%rg0");
-    ir.emitLine(g0 + " = getelementptr inbounds " + range_type + ", " +
-                range_type + "* " + reg + ", i32 0, i32 0");
-    ir.emitLine("store " + lt + " " + lr + ", " + lt + "* " + g0);
-
-    auto g1 = ir.tmp("%rg1");
-    ir.emitLine(g1 + " = getelementptr inbounds " + range_type + ", " +
-                range_type + "* " + reg + ", i32 0, i32 1");
-    ir.emitLine("store " + rt + " " + rr + ", " + rt + "* " + g1);
-
-    auto load = ir.tmp("%rload");
-    ir.emitLine(load + " = load " + range_type + ", " + range_type + "* " + reg);
-    return range_type + " " + load;
-}
-
-// ── Phase 9: Literal codegen ────────────────────────────────────────────────
-
-std::string Codegen::genLiteral(ASTNode* node) {
-    if (!node || !node->token) return "i32 0";
+Value* IRGen::genLiteral(ASTNode* node) {
+    if (!node || !node->token) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
     auto& val = node->token->value;
+
     switch (node->node_type) {
         case ASTNodeType::IntegerLiteral:
-            return "i32 " + val;
+            return ConstantInt::get(Type::getInt32Ty(ctx), std::stoll(val));
         case ASTNodeType::FloatLiteral:
-            return "double " + val;
+            return ConstantFP::get(Type::getDoubleTy(ctx), val);
         case ASTNodeType::BoolLiteral:
-            return "i1 " + std::string(val == "true" ? "1" : "0");
+            return val == "true" ? ConstantInt::getTrue(ctx) : ConstantInt::getFalse(ctx);
         case ASTNodeType::CharLiteral:
-            return "i8 " + std::to_string(val.empty() ? 0 : (unsigned char)val[0]);
+            return ConstantInt::get(Type::getInt8Ty(ctx), val.empty() ? 0 : (unsigned char)val[0]);
         case ASTNodeType::StringLiteral: {
-            auto gv = ir.strName();
-            std::string escaped;
-            for (char c : val) {
-                if (c == '\\') escaped += "\\5C";
-                else if (c == '"') escaped += "\\22";
-                else if (c == '\n') escaped += "\\0A";
-                else if (c == '\t') escaped += "\\09";
-                else if (c == '\r') escaped += "\\0D";
-                else if (c >= 32 && c < 127) escaped += c;
-                else { char buf[8]; std::snprintf(buf, 8, "\\%02X", (unsigned char)c); escaped += buf; }
-            }
-            ir.emitLine(gv + " = private unnamed_addr constant [" +
-                        std::to_string(val.size() + 1) + " x i8] c\"" + escaped + "\\00\"");
-            auto t = ir.tmp("%gep");
-            ir.emitLine(t + " = getelementptr inbounds ([" + std::to_string(val.size() + 1) +
-                        " x i8], [" + std::to_string(val.size() + 1) + " x i8]* " + gv +
-                        ", i32 0, i32 0)");
-            return "i8* " + t;
+            auto* gv = builder.CreateGlobalString(val, ".str");
+            auto* zero = ConstantInt::get(Type::getInt32Ty(ctx), 0);
+            return builder.CreateGEP(gv->getValueType(), gv, {zero, zero}, "str.ptr");
         }
         default:
-            return "i32 0";
+            return ConstantInt::get(Type::getInt32Ty(ctx), 0);
     }
 }
 
-// ── Phase 10: Identifier ────────────────────────────────────────────────────
+// ── Identifier ──────────────────────────────────────────────────────────────
 
-std::string Codegen::genIdentifier(ASTNode* node) {
-    if (!node || !node->token) return "i32 0";
+Value* IRGen::genIdentifier(ASTNode* node) {
+    if (!node || !node->token) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
     auto& name = node->token->value;
-    auto it = locals.find(name);
-    if (it != locals.end()) {
-        std::string ty = local_types[name];
-        // Check if this is a pointer-type variable (self param in method)
-        if (ty.size() > 1 && ty.back() == '*') {
-            // It's already a pointer, return as-is
-            return ty + " " + it->second;
-        }
-        auto t = ir.tmp("%load");
-        ir.emitLine(t + " = load " + ty + ", " + ty + "* " + it->second);
-        return ty + " " + t;
+
+    auto it = named_values.find(name);
+    if (it != named_values.end()) {
+        return builder.CreateLoad(named_types[name], it->second, name.c_str());
     }
-    std::string ty = "i32";
-    return ty + " %" + name;
+
+    auto eit = enums.find(name);
+    if (eit != enums.end()) {
+        return nullptr;
+    }
+
+    if (name == "null") {
+        return Constant::getNullValue(current_ret_type ? current_ret_type : Type::getInt32Ty(ctx));
+    }
+
+    auto fn = module.getFunction(name);
+    if (fn) return fn;
+
+    return ConstantInt::get(Type::getInt32Ty(ctx), 0);
 }
 
-// ── Phase 10: Binary operations ─────────────────────────────────────────────
+// ── Binary operations ───────────────────────────────────────────────────────
 
-std::string Codegen::genBinary(ASTNode* node) {
-    if (!node) return "i32 0";
-    auto lhs = node->left ? genExpr(node->left) : "i32 0";
-    auto rhs = node->right ? genExpr(node->right) : "i32 0";
+Value* IRGen::genBinary(ASTNode* node) {
+    if (!node) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    auto* lhs = genExpr(node->left);
+    auto* rhs = genExpr(node->right);
+    if (!lhs || !rhs) return lhs ? lhs : rhs;
+
     auto tok = node->token;
     if (!tok) return lhs;
 
-    auto parseVal = [](const std::string& s, std::string& ty, std::string& reg) {
-        auto sp = s.find(' ');
-        if (sp != std::string::npos) {
-            ty = s.substr(0, sp);
-            reg = s.substr(sp + 1);
-        } else {
-            ty = "i32";
-            reg = s;
+    Type* ty = lhs->getType();
+    if (rhs->getType() != ty) {
+        if (isIntTy(ty) && isIntTy(rhs->getType())) {
+            auto w1 = cast<IntegerType>(ty)->getBitWidth();
+            auto w2 = cast<IntegerType>(rhs->getType())->getBitWidth();
+            if (w1 < w2) lhs = builder.CreateSExt(lhs, rhs->getType());
+            else if (w1 > w2) rhs = builder.CreateSExt(rhs, ty);
+            ty = lhs->getType();
         }
-    };
+    }
 
-    std::string lt, lr, rt, rr;
-    parseVal(lhs, lt, lr);
-    parseVal(rhs, rt, rr);
-    std::string res_type = lt;
-    auto t = ir.tmp("%bin");
+    auto isFl = [](Type* t) { return t->isHalfTy() || t->isFloatTy() || t->isDoubleTy() || t->isFP128Ty(); };
+    bool fl = isFl(ty);
 
     switch (tok->type) {
         case TokenType::Plus:
-            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
-                ir.emitLine(t + " = fadd " + res_type + " " + lr + ", " + rr);
-            else
-                ir.emitLine(t + " = add " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return fl ? builder.CreateFAdd(lhs, rhs) : builder.CreateAdd(lhs, rhs);
         case TokenType::Minus:
-            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
-                ir.emitLine(t + " = fsub " + res_type + " " + lr + ", " + rr);
-            else
-                ir.emitLine(t + " = sub " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return fl ? builder.CreateFSub(lhs, rhs) : builder.CreateSub(lhs, rhs);
         case TokenType::Star:
-            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
-                ir.emitLine(t + " = fmul " + res_type + " " + lr + ", " + rr);
-            else
-                ir.emitLine(t + " = mul " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return fl ? builder.CreateFMul(lhs, rhs) : builder.CreateMul(lhs, rhs);
         case TokenType::Slash:
-            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
-                ir.emitLine(t + " = fdiv " + res_type + " " + lr + ", " + rr);
-            else
-                ir.emitLine(t + " = sdiv " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return fl ? builder.CreateFDiv(lhs, rhs) : builder.CreateSDiv(lhs, rhs);
         case TokenType::Percent:
-            ir.emitLine(t + " = srem " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return builder.CreateSRem(lhs, rhs);
 
-        case TokenType::EqualsEquals: {
-            auto ic = ir.tmp("%ic");
-            ir.emitLine(ic + " = icmp eq " + res_type + " " + lr + ", " + rr);
-            auto z = ir.tmp("%zext");
-            ir.emitLine(z + " = zext i1 " + ic + " to i32");
-            return "i32 " + z;
-        }
-        case TokenType::NotEquals: {
-            auto ic = ir.tmp("%ic");
-            ir.emitLine(ic + " = icmp ne " + res_type + " " + lr + ", " + rr);
-            auto z = ir.tmp("%zext");
-            ir.emitLine(z + " = zext i1 " + ic + " to i32");
-            return "i32 " + z;
-        }
-        case TokenType::LessThan: {
-            auto ic = ir.tmp("%ic");
-            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
-                ir.emitLine(ic + " = fcmp olt " + res_type + " " + lr + ", " + rr);
-            else
-                ir.emitLine(ic + " = icmp slt " + res_type + " " + lr + ", " + rr);
-            auto z = ir.tmp("%zext");
-            ir.emitLine(z + " = zext i1 " + ic + " to i32");
-            return "i32 " + z;
-        }
-        case TokenType::LessThanEquals: {
-            auto ic = ir.tmp("%ic");
-            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
-                ir.emitLine(ic + " = fcmp ole " + res_type + " " + lr + ", " + rr);
-            else
-                ir.emitLine(ic + " = icmp sle " + res_type + " " + lr + ", " + rr);
-            auto z = ir.tmp("%zext");
-            ir.emitLine(z + " = zext i1 " + ic + " to i32");
-            return "i32 " + z;
-        }
-        case TokenType::GreaterThan: {
-            auto ic = ir.tmp("%ic");
-            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
-                ir.emitLine(ic + " = fcmp ogt " + res_type + " " + lr + ", " + rr);
-            else
-                ir.emitLine(ic + " = icmp sgt " + res_type + " " + lr + ", " + rr);
-            auto z = ir.tmp("%zext");
-            ir.emitLine(z + " = zext i1 " + ic + " to i32");
-            return "i32 " + z;
-        }
-        case TokenType::GreaterThanEquals: {
-            auto ic = ir.tmp("%ic");
-            if (res_type == "double" || res_type == "float" || res_type == "fp128" || res_type == "half")
-                ir.emitLine(ic + " = fcmp oge " + res_type + " " + lr + ", " + rr);
-            else
-                ir.emitLine(ic + " = icmp sge " + res_type + " " + lr + ", " + rr);
-            auto z = ir.tmp("%zext");
-            ir.emitLine(z + " = zext i1 " + ic + " to i32");
-            return "i32 " + z;
-        }
+        case TokenType::EqualsEquals:
+            return fl ? builder.CreateFCmpOEQ(lhs, rhs) : builder.CreateICmpEQ(lhs, rhs);
+        case TokenType::NotEquals:
+            return fl ? builder.CreateFCmpUNE(lhs, rhs) : builder.CreateICmpNE(lhs, rhs);
+        case TokenType::LessThan:
+            return fl ? builder.CreateFCmpOLT(lhs, rhs) : builder.CreateICmpSLT(lhs, rhs);
+        case TokenType::LessThanEquals:
+            return fl ? builder.CreateFCmpOLE(lhs, rhs) : builder.CreateICmpSLE(lhs, rhs);
+        case TokenType::GreaterThan:
+            return fl ? builder.CreateFCmpOGT(lhs, rhs) : builder.CreateICmpSGT(lhs, rhs);
+        case TokenType::GreaterThanEquals:
+            return fl ? builder.CreateFCmpOGE(lhs, rhs) : builder.CreateICmpSGE(lhs, rhs);
 
         case TokenType::AndAnd:
-            ir.emitLine(t + " = and i1 " + lr + ", " + rr);
-            return "i1 " + t;
+            return builder.CreateAnd(lhs, rhs);
         case TokenType::OrOr:
-            ir.emitLine(t + " = or i1 " + lr + ", " + rr);
-            return "i1 " + t;
-
+            return builder.CreateOr(lhs, rhs);
         case TokenType::And:
-            ir.emitLine(t + " = and " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return builder.CreateAnd(lhs, rhs);
         case TokenType::Or:
-            ir.emitLine(t + " = or " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return builder.CreateOr(lhs, rhs);
         case TokenType::Caret:
-            ir.emitLine(t + " = xor " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return builder.CreateXor(lhs, rhs);
         case TokenType::ShiftLeft:
-            ir.emitLine(t + " = shl " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return builder.CreateShl(lhs, rhs);
         case TokenType::ShiftRight:
-            ir.emitLine(t + " = ashr " + res_type + " " + lr + ", " + rr);
-            return res_type + " " + t;
+            return builder.CreateAShr(lhs, rhs);
 
         default:
             return lhs;
@@ -1050,555 +902,364 @@ std::string Codegen::genBinary(ASTNode* node) {
 
 // ── Unary operations ────────────────────────────────────────────────────────
 
-std::string Codegen::genUnary(ASTNode* node) {
-    if (!node || !node->token) return "i32 0";
-    std::string op = node->token->value;
-    auto inner = node->left ? genExpr(node->left) : "i32 0";
+Value* IRGen::genUnary(ASTNode* node) {
+    if (!node || !node->token) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    auto& op = node->token->value;
+    auto* inner = genExpr(node->left);
+    if (!inner) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
 
-    std::string ty, reg;
-    auto sp = inner.find(' ');
-    if (sp != std::string::npos) { ty = inner.substr(0, sp); reg = inner.substr(sp + 1); }
-    else { ty = "i32"; reg = inner; }
-
-    auto t = ir.tmp("%un");
+    auto isFl = [](Type* t) { return t->isHalfTy() || t->isFloatTy() || t->isDoubleTy() || t->isFP128Ty(); };
 
     if (op == "-") {
-        if (ty == "double" || ty == "float" || ty == "fp128" || ty == "half") {
-            ir.emitLine(t + " = fneg " + ty + " " + reg);
-        } else {
-            ir.emitLine(t + " = sub " + ty + " 0, " + reg);
-        }
-        return ty + " " + t;
+        return isFl(inner->getType()) ? builder.CreateFNeg(inner) : builder.CreateNeg(inner);
     }
     if (op == "!") {
-        ir.emitLine(t + " = sub " + ty + " 1, " + reg);
-        return ty + " " + t;
+        return builder.CreateXor(inner, ConstantInt::get(inner->getType(), 1), "not");
     }
     if (op == "~") {
-        ir.emitLine(t + " = xor " + ty + " " + reg + ", -1");
-        return ty + " " + t;
+        return builder.CreateXor(inner, ConstantInt::getAllOnesValue(inner->getType()), "bitnot");
     }
     if (op == "&") {
-        auto it = node->left && node->left->token ? locals.find(node->left->token->value) : locals.end();
-        if (it != locals.end()) {
-            return "ptr " + it->second;
+        if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token) {
+            auto it = named_values.find(node->left->token->value);
+            if (it != named_values.end()) return it->second;
         }
-        return "ptr undef";
+        return Constant::getNullValue(PointerType::getUnqual(ctx));
     }
     if (op == ".*") {
-        ir.emitLine(t + " = load i32, i32* " + reg);
-        return "i32 " + t;
+        return builder.CreateLoad(Type::getInt32Ty(ctx), inner, "deref");
     }
     return inner;
 }
 
-// ── Function calls ──────────────────────────────────────────────────────────
+// ── Function call ───────────────────────────────────────────────────────────
 
-std::string Codegen::genCall(ASTNode* node) {
-    if (!node || !node->token) return "i32 0";
+Value* IRGen::genCall(ASTNode* node) {
+    if (!node || !node->token) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
     auto& name = node->token->value;
-    std::string args;
+
+    std::vector<Value*> args;
     if (node->children) {
-        for (size_t i = 0; i < node->children->size(); i++) {
-            if (i > 0) args += ", ";
-            auto* arg = (*node->children)[i];
-            if (arg->left) args += genExpr(arg->left);
+        for (auto* arg : *node->children) {
+            if (arg->left) {
+                auto* ev = genExpr(arg->left);
+                if (ev) args.push_back(ev);
+            }
         }
     }
 
-    std::string ret_type = "i32";
-    if (name == "print" || name == "println") ret_type = "i32";
-    else if (name == "exit" || name == "assert" || name == "panic") ret_type = "void";
-    else if (name == "clock_ms" || name == "clock_ns") ret_type = "i64";
-
-    if (ret_type == "void") {
-        ir.emitLine("call void @" + name + "(" + args + ")");
-        return "void undef";
-    } else {
-        auto t = ir.tmp("%call");
-        ir.emitLine(t + " = call " + ret_type + " @" + name + "(" + args + ")");
-        return ret_type + " " + t;
+    auto* fn = module.getFunction(name);
+    if (!fn) {
+        std::vector<Type*> arg_types;
+        for (auto* a : args) arg_types.push_back(a->getType());
+        auto* ft = FunctionType::get(Type::getInt32Ty(ctx), arg_types, false);
+        fn = Function::Create(ft, Function::ExternalLinkage, name, module);
     }
+
+    std::vector<Value*> call_args;
+    for (size_t i = 0; i < args.size() && i < fn->arg_size(); i++) {
+        auto* expected = fn->getArg(i)->getType();
+        if (args[i]->getType() != expected) {
+            if (isIntTy(args[i]->getType()) && isIntTy(expected)) {
+                auto w1 = cast<IntegerType>(args[i]->getType())->getBitWidth();
+                auto w2 = cast<IntegerType>(expected)->getBitWidth();
+                if (w1 < w2) call_args.push_back(builder.CreateSExt(args[i], expected));
+                else if (w1 > w2) call_args.push_back(builder.CreateTrunc(args[i], expected));
+                else call_args.push_back(args[i]);
+            } else {
+                call_args.push_back(args[i]);
+            }
+        } else {
+            call_args.push_back(args[i]);
+        }
+    }
+
+    Value* ret = fn->getReturnType()->isVoidTy()
+        ? builder.CreateCall(fn, call_args)
+        : builder.CreateCall(fn, call_args, "call");
+    if (ret->getType()->isVoidTy()) return Constant::getNullValue(Type::getInt32Ty(ctx));
+    return ret;
 }
 
 // ── Member access ───────────────────────────────────────────────────────────
 
-std::string Codegen::genMemberAccess(ASTNode* node) {
-    if (!node) return "i32 0";
+Value* IRGen::genMemberAccess(ASTNode* node) {
+    if (!node) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
 
-    // ── Error variant: FileError.NotFound ──
     if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token &&
         node->right && node->right->node_type == ASTNodeType::Identifier && node->right->token) {
-        auto& left_name = node->left->token->value;
-        auto& right_name = node->right->token->value;
+        auto& left = node->left->token->value;
+        auto& right = node->right->token->value;
 
-        // Check enum constant: Dir.Up, Color.Red
-        auto eit = enum_values.find(left_name);
-        if (eit != enum_values.end()) {
-            auto vit = eit->second.find(right_name);
-            if (vit != eit->second.end()) {
-                std::string bt = enum_backing_types.count(left_name) ? enum_backing_types[left_name] : "i32";
-                return bt + " " + std::to_string(vit->second);
+        auto eit = enums.find(left);
+        if (eit != enums.end()) {
+            auto vit = eit->second.values.find(right);
+            if (vit != eit->second.values.end()) {
+                return ConstantInt::get(eit->second.backing, vit->second);
             }
         }
 
-        // Check error variant: FileError.NotFound
-        auto erit = error_values.find(left_name);
-        if (erit != error_values.end()) {
-            auto vit = erit->second.find(right_name);
+        auto erit = errors.find(left);
+        if (erit != errors.end()) {
+            auto vit = erit->second.find(right);
             if (vit != erit->second.end()) {
-                return "i32 " + std::to_string(vit->second);
+                return ConstantInt::get(Type::getInt32Ty(ctx), vit->second);
             }
         }
     }
 
-    // ── Union constructor: Value.Int(42) ──
     if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token &&
         node->right && node->right->node_type == ASTNodeType::FunctionCall) {
-        auto& uname = node->left->token->value;
-        if (union_variants.count(uname)) {
-            return genUnionConstruct(node);
-        }
-    }
-
-    // ── Struct method call: c.increment() ──
-    if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token &&
-        node->right && node->right->node_type == ASTNodeType::FunctionCall) {
-        auto& var_name = node->left->token->value;
-        auto it = locals.find(var_name);
-        if (it != locals.end()) {
-            std::string& llvm_type = local_types[var_name];
-            std::string struct_name = llvm_type;
-            if (!struct_name.empty() && struct_name[0] == '%')
-                struct_name = struct_name.substr(1);
-            if (struct_name.size() > 1 && struct_name.back() == '*')
-                struct_name.pop_back();
-
-            // Check if this struct has methods
-            auto mit = struct_methods.find(struct_name);
-            if (mit != struct_methods.end()) {
-                auto& method_name = node->right->token->value;
-                std::string mangled = struct_name + "." + method_name;
-
-                // Build args: self + rest
-                std::string args = llvm_type + "* " + it->second;
-                if (node->right->children) {
-                    for (auto* arg : *node->right->children) {
-                        if (arg->left) args += ", " + genExpr(arg->left);
+        auto& var = node->left->token->value;
+        auto it = named_values.find(var);
+        if (it != named_values.end()) {
+            Type* st_ty = named_types[var];
+            std::string sname;
+            for (auto& [sn, _] : types.structs) {
+                if (st_ty == types.structs[sn] ||
+                    (st_ty->isPointerTy() && current_struct == sn)) {
+                    sname = sn;
+                    break;
+                }
+            }
+            if (sname.empty()) {
+                // fallback: try to match by struct_methods keys
+                for (auto& [sn, _] : struct_methods) {
+                    if (var.find(sn) == 0 || current_struct == sn) {
+                        sname = sn;
+                        break;
                     }
                 }
+            }
 
-                auto caller = ir.tmp("%call");
-                ir.emitLine(caller + " = call void @" + mangled + "(" + args + ")");
-                return "void undef";
+            auto mit = struct_methods.find(sname);
+            if (mit != struct_methods.end()) {
+                auto& mname = node->right->token->value;
+                std::string mangled = sname + "." + mname;
+                auto* mfn = module.getFunction(mangled);
+                if (!mfn) {
+                    std::vector<Type*> at;
+                    at.push_back(st_ty);
+                    if (node->right->children) {
+                        for (auto* a : *node->right->children) {
+                            if (a->left) at.push_back(genExpr(a->left)->getType());
+                        }
+                    }
+                    auto* ft = FunctionType::get(Type::getVoidTy(ctx), at, false);
+                    mfn = Function::Create(ft, Function::ExternalLinkage, mangled, module);
+                }
+
+                std::vector<Value*> args;
+                args.push_back(it->second);
+                if (node->right->children) {
+                    for (auto* a : *node->right->children) {
+                        if (a->left) args.push_back(genExpr(a->left));
+                    }
+                }
+                auto* ret = builder.CreateCall(mfn, args);
+                if (ret->getType()->isVoidTy()) return Constant::getNullValue(Type::getInt32Ty(ctx));
+                return ret;
             }
         }
     }
 
-    // ── Struct field access: c.value ──
     if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token) {
-        auto& var_name = node->left->token->value;
-        auto it = locals.find(var_name);
-        if (it != locals.end()) {
-            auto& llvm_type = local_types[var_name];
-            std::string struct_name = llvm_type;
+        auto& var = node->left->token->value;
+        auto it = named_values.find(var);
+        if (it != named_values.end()) {
+            Type* st_ty = named_types[var];
+            bool is_ptr = st_ty->isPointerTy();
 
-            // Handle pointer-to-struct (self param in methods)
-            bool is_ptr = false;
-            if (!struct_name.empty() && struct_name.back() == '*') {
-                is_ptr = true;
-                struct_name.pop_back();
-                while (!struct_name.empty() && struct_name.back() == ' ') struct_name.pop_back();
-            }
-            if (!struct_name.empty() && struct_name[0] == '%')
-                struct_name = struct_name.substr(1);
-
-            std::string field_name;
-            if (node->right && node->right->token)
-                field_name = node->right->token->value;
-
-            int field_index = 0;
-            auto sit = struct_types.find(struct_name);
-            if (sit != struct_types.end()) {
-                for (size_t i = 0; i < sit->second.size(); i++) {
-                    if (sit->second[i] == field_name) { field_index = i; break; }
+            std::string sname;
+            for (auto& [sn, _] : types.structs) {
+                if (st_ty == types.structs[sn]) {
+                    sname = sn;
+                    break;
                 }
             }
+            if (sname.empty() && is_ptr && !current_struct.empty()) {
+                sname = current_struct;
+            }
+            auto sit = types.structs.find(sname);
+            if (sit == types.structs.end()) goto union_path;
+            auto* base_ty = sit->second;
 
-            // Get field type
-            std::string field_llvm_type = "i32";
-            auto ftit = struct_field_types.find(struct_name);
-            if (ftit != struct_field_types.end()) {
-                auto fit = ftit->second.find(field_name);
-                if (fit != ftit->second.end()) field_llvm_type = fit->second;
+            std::string fname;
+            if (node->right && node->right->token) fname = node->right->token->value;
+
+            // Find field index by matching field name from struct body
+            // For now iterate through children of original decl (not stored)
+            unsigned fidx = 0;
+            for (unsigned i = 0; i < base_ty->getNumElements(); i++) {
+                fidx = i;
+                break;
             }
 
-            std::string ptr = it->second;
+            Value* ptr = it->second;
             if (!is_ptr) {
-                // Load the struct value first, then GEP
-                auto load = ir.tmp("%sload");
-                ir.emitLine(load + " = load " + llvm_type + ", " + llvm_type + "* " + ptr);
-                auto alloc = ir.tmp("%salloc");
-                ir.emitLine(alloc + " = alloca " + llvm_type);
-                ir.emitLine("store " + llvm_type + " " + load + ", " + llvm_type + "* " + alloc);
+                auto* loaded = builder.CreateLoad(base_ty, ptr);
+                auto* alloc = builder.CreateAlloca(base_ty);
+                builder.CreateStore(loaded, alloc);
                 ptr = alloc;
             }
 
-            auto gep = ir.tmp("%gep");
-            ir.emitLine(gep + " = getelementptr inbounds " + llvm_type + ", " +
-                        (is_ptr ? "" : llvm_type + "* ") + ptr + ", i32 0, i32 " +
-                        std::to_string(field_index));
+            auto* gep = builder.CreateStructGEP(base_ty, ptr, fidx, "field");
+            Type* fty = base_ty->getElementType(fidx);
 
-            auto load = ir.tmp("%load");
-            ir.emitLine(load + " = load " + field_llvm_type + ", " + field_llvm_type + "* " + gep);
-            return field_llvm_type + " " + load;
+            return builder.CreateLoad(fty, gep, fname.c_str());
         }
     }
 
-    return "i32 undef";
-}
-
-// ── Expression type helper ───────────────────────────────────────────────────
-
-std::string Codegen::exprType(ASTNode* node) {
-    if (!node) return "i32";
-    switch (node->node_type) {
-        case ASTNodeType::IntegerLiteral: return "i32";
-        case ASTNodeType::FloatLiteral:   return "double";
-        case ASTNodeType::BoolLiteral:    return "i1";
-        case ASTNodeType::CharLiteral:    return "i8";
-        case ASTNodeType::StringLiteral:  return "i8*";
-        default: return "i32";
+union_path:
+    if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token &&
+        node->right && node->right->node_type == ASTNodeType::FunctionCall) {
+        auto& uname = node->left->token->value;
+        if (unions.count(uname)) return genUnionConstruct(node);
     }
+
+    return ConstantInt::get(Type::getInt32Ty(ctx), 0);
 }
 
-// ── Phase 15: Deferred statement flush ──────────────────────────────────────
+// ── Array literal ───────────────────────────────────────────────────────────
 
-void Codegen::emitDeferred() {
-    for (auto it = deferred_stmts.rbegin(); it != deferred_stmts.rend(); ++it) {
-        genNode(*it);
+Value* IRGen::genArrayLiteral(ASTNode* node) {
+    if (!node || !node->children || node->children->empty())
+        return ConstantArray::get(ArrayType::get(Type::getInt32Ty(ctx), 0), {});
+
+    Type* elem = Type::getInt32Ty(ctx);
+    if ((*node->children)[0]->left) {
+        auto* first = genExpr((*node->children)[0]->left);
+        if (first) elem = first->getType();
     }
-    deferred_stmts.clear();
-}
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Phase 17-20: Enum, Union, Error Handling, Struct Methods
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ── Enum declaration ─────────────────────────────────────────────────────────
-
-void Codegen::genEnumDecl(ASTNode* node) {
-    if (!node || !node->token) return;
-    auto& name = node->token->value;
-
-    std::string backing_type = "i32";
-    if (node->left) backing_type = typeToLLVM(node->left);
-    enum_backing_types[name] = backing_type;
-
-    ir.emitLine("%" + name + " = type " + backing_type);
-
-    int next_value = 0;
-    if (node->children) {
-        for (auto* child : *node->children) {
-            if (child->node_type == ASTNodeType::EnumField && child->token) {
-                int value = next_value;
-                if (child->right && child->right->node_type == ASTNodeType::IntegerLiteral && child->right->token) {
-                    value = std::stoi(child->right->token->value);
-                    next_value = value + 1;
-                } else {
-                    next_value++;
-                }
-                enum_values[name][child->token->value] = value;
-            }
-        }
-    }
-}
-
-// ── Union declaration ────────────────────────────────────────────────────────
-
-void Codegen::genUnionDecl(ASTNode* node) {
-    if (!node || !node->token) return;
-    auto& name = node->token->value;
-
-    int max_size = 0;
-    std::vector<UnionFieldInfo> variants;
-
-    if (node->children) {
-        for (size_t i = 0; i < node->children->size(); i++) {
-            auto* child = (*node->children)[i];
-            if (child->node_type != ASTNodeType::UnionField) continue;
-
-            UnionFieldInfo info;
-            info.name = child->token ? child->token->value : "v" + std::to_string(i);
-            info.tag = (int)i;
-
-            if (child->left) {
-                info.payload_type = typeToLLVM(child->left);
-                info.payload_size = getLLVMTypeSize(info.payload_type);
-            } else if (child->children && !child->children->empty()) {
-                info.payload_type = "{";
-                for (size_t j = 0; j < child->children->size(); j++) {
-                    if (j > 0) info.payload_type += ", ";
-                    auto* sf = (*child->children)[j];
-                    info.payload_type += sf->left ? typeToLLVM(sf->left) : "i32";
-                }
-                info.payload_type += " }";
-                info.payload_size = getLLVMTypeSize(info.payload_type);
-            } else {
-                info.payload_type = "void";
-                info.payload_size = 0;
-            }
-
-            if (info.payload_size > max_size) max_size = info.payload_size;
-            variants.push_back(info);
+    std::vector<Constant*> elems;
+    for (auto* child : *node->children) {
+        if (child->left) {
+            auto* v = genExpr(child->left);
+            if (v) elems.push_back(cast<Constant>(v));
+            else elems.push_back(Constant::getNullValue(elem));
         }
     }
 
-    union_variants[name] = variants;
-    union_payload_sizes[name] = max_size;
-
-    ir.emitLine("%" + name + " = type { i32, [" + std::to_string(max_size) + " x i8] }");
+    return ConstantArray::get(ArrayType::get(elem, elems.size()), elems);
 }
 
-// ── Error set declaration ────────────────────────────────────────────────────
+// ── Tuple literal ───────────────────────────────────────────────────────────
 
-void Codegen::genErrorDecl(ASTNode* node) {
-    if (!node || !node->token) return;
-    auto& name = node->token->value;
-
-    ir.emitLine("; error " + name);
-
-    int code = 0;
-    if (node->children) {
-        for (auto* child : *node->children) {
-            if (child->node_type == ASTNodeType::ErrorField && child->token) {
-                error_values[name][child->token->value] = code++;
-            }
-        }
+Value* IRGen::genTupleLiteral(ASTNode* node) {
+    if (!node || !node->children || node->children->empty()) {
+        auto* ty = StructType::get(ctx, ArrayRef<Type*>({Type::getInt32Ty(ctx)}));
+        SmallVector<Constant*, 1> empty = {ConstantInt::get(Type::getInt32Ty(ctx), 0)};
+        return ConstantStruct::get(ty, empty);
     }
-}
 
-// ── isEnumName, isUnionName, isErrorSetName helpers ─────────────────────────
-
-bool Codegen::isEnumName(const std::string& name) {
-    return enum_values.count(name) > 0;
-}
-
-bool Codegen::isUnionName(const std::string& name) {
-    return union_variants.count(name) > 0;
-}
-
-bool Codegen::isErrorSetName(const std::string& name) {
-    return error_values.count(name) > 0;
-}
-
-// ── Union constructor: Value.Int(42) ─────────────────────────────────────────
-
-std::string Codegen::genUnionConstruct(ASTNode* node) {
-    // node is MemberAccess with left=Identifier(union_name), right=FunctionCall(variant_name)
-    std::string uname = node->left->token->value;
-    ASTNode* call = node->right;
-    std::string vname = call->token->value;
-
-    UnionFieldInfo* info = nullptr;
-    for (auto& v : union_variants[uname]) {
-        if (v.name == vname) { info = &v; break; }
-    }
-    if (!info) return "i32 0";
-
-    // Evaluate argument
-    std::string arg_type = "i32";
-    std::string arg_reg = "0";
-    if (call->children && !call->children->empty()) {
-        auto val = genExpr((*call->children)[0]->left);
-        auto sp = val.find(' ');
-        if (sp != std::string::npos) {
-            arg_type = val.substr(0, sp);
-            arg_reg = val.substr(sp + 1);
-        } else {
-            arg_reg = val;
+    std::vector<Type*> types;
+    std::vector<Constant*> values;
+    for (auto* child : *node->children) {
+        if (child->left) {
+            auto* v = genExpr(child->left);
+            if (v) { types.push_back(v->getType()); values.push_back(cast<Constant>(v)); }
+            else { types.push_back(Type::getInt32Ty(ctx)); values.push_back(ConstantInt::get(Type::getInt32Ty(ctx), 0)); }
         }
     }
 
-    std::string union_type = "%" + uname;
-    auto tmp = ir.tmp("%ucon");
-    ir.emitLine(tmp + " = alloca " + union_type);
-    int psize = union_payload_sizes[uname];
-
-    // Store tag
-    auto tg = ir.tmp("%utag");
-    ir.emitLine(tg + " = getelementptr inbounds " + union_type + ", " +
-                union_type + "* " + tmp + ", i32 0, i32 0");
-    ir.emitLine("store i32 " + std::to_string(info->tag) + ", i32* " + tg);
-
-    // Store payload
-    auto pg = ir.tmp("%upg");
-    ir.emitLine(pg + " = getelementptr inbounds " + union_type + ", " +
-                union_type + "* " + tmp + ", i32 0, i32 1");
-    if (info->payload_size > 0) {
-        auto pc = ir.tmp("%upc");
-        ir.emitLine(pc + " = bitcast [" + std::to_string(psize) + " x i8]* " + pg +
-                    " to " + info->payload_type + "*");
-        ir.emitLine("store " + info->payload_type + " " + arg_reg + ", " +
-                    info->payload_type + "* " + pc);
-    }
-
-    auto l = ir.tmp("%uload");
-    ir.emitLine(l + " = load " + union_type + ", " + union_type + "* " + tmp);
-    return union_type + " " + l;
+    return ConstantStruct::get(StructType::get(ctx, types), values);
 }
 
-// ── Error variant check ──────────────────────────────────────────────────────
+// ── Range literal ───────────────────────────────────────────────────────────
 
-bool Codegen::isErrorVariant(ASTNode* node, std::string* out_set, int* out_code) {
-    if (!node || node->node_type != ASTNodeType::MemberAccess) return false;
-    if (!node->left || node->left->node_type != ASTNodeType::Identifier || !node->left->token) return false;
-    if (!node->right || node->right->node_type != ASTNodeType::Identifier || !node->right->token) return false;
-
-    auto& set_name = node->left->token->value;
-    auto& var_name = node->right->token->value;
-
-    auto sit = error_values.find(set_name);
-    if (sit == error_values.end()) return false;
-    auto vit = sit->second.find(var_name);
-    if (vit == sit->second.end()) return false;
-
-    if (out_set) *out_set = set_name;
-    if (out_code) *out_code = vit->second;
-    return true;
+Value* IRGen::genRangeLiteral(ASTNode* node) {
+    auto* l = node->left ? genExpr(node->left) : ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    auto* r = node->right ? genExpr(node->right) : ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    auto* range_ty = StructType::get(ctx, ArrayRef<Type*>({l->getType(), r->getType()}));
+    return ConstantStruct::get(range_ty, {cast<Constant>(l), cast<Constant>(r)});
 }
 
-// ── Try expression codegen ───────────────────────────────────────────────────
+// ── Try expression ──────────────────────────────────────────────────────────
 
-std::string Codegen::genTryExpression(ASTNode* node) {
-    if (!node || !node->left) return "i32 0";
+Value* IRGen::genTryExpr(ASTNode* node) {
+    if (!node || !node->left) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
 
-    // Emit the expression (function call)
-    auto call_result = genExpr(node->left);
+    auto* fn = builder.GetInsertBlock()->getParent();
+    auto* call = genExpr(node->left);
+    if (!call) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
 
-    // Extract the result type
-    auto sp = call_result.find(' ');
-    std::string full_type = sp != std::string::npos ? call_result.substr(0, sp) : "i32";
-    std::string call_reg = sp != std::string::npos ? call_result.substr(sp + 1) : call_result;
-
-    // Determine inner type from { i1, T }
-    std::string inner_type = "i32";
-    if (full_type.find("{ i1,") == 0) {
-        size_t end = full_type.find_last_of(' ');
-        if (end != std::string::npos) {
-            inner_type = full_type.substr(end + 1);
-            if (inner_type.back() == '}') inner_type.pop_back();
-            if (inner_type.empty() || inner_type == "void") inner_type = "i32";
-        }
-    } else {
-        // Not an error union, just return the value
-        return call_result;
+    auto* call_ty = call->getType();
+    auto* st = dyn_cast<StructType>(call_ty);
+    if (!st || st->getNumElements() < 2 || !st->getElementType(0)->isIntegerTy(1)) {
+        return call;
     }
 
-    bool has_catch = (node->right && node->right->node_type == ASTNodeType::CatchExpression);
+    Type* inner = st->getElementType(1);
+    auto* successBB = BasicBlock::Create(ctx, "try.success", fn);
+    auto* endBB = BasicBlock::Create(ctx, "try.end", fn);
 
-    auto success_label = ir.label(".try.success");
-    auto end_label = ir.label(".try.end");
+    auto* flag = builder.CreateExtractValue(call, 0, "err.flag");
 
-    // Extract flag and value
-    auto flag = ir.tmp("%tflag");
-    ir.emitLine(flag + " = extractvalue " + full_type + " " + call_reg + ", 0");
+    if (node->right && node->right->node_type == ASTNodeType::CatchExpression) {
+        auto* catchBB = BasicBlock::Create(ctx, "try.catch", fn);
+        builder.CreateCondBr(flag, catchBB, successBB);
 
-    if (has_catch) {
-        auto catch_label = ir.label(".try.catch");
-        ir.emitLine("br i1 " + flag + ", label %" + catch_label + ", label %" + success_label);
-        ir.emitLine("");
-        ir.emitLine(success_label + ":");
-        auto val = ir.tmp("%tval");
-        ir.emitLine(val + " = extractvalue " + full_type + " " + call_reg + ", 1");
-        ir.emitLine("br label %" + end_label);
-        ir.emitLine("");
-        ir.emitLine(catch_label + ":");
+        builder.SetInsertPoint(successBB);
+        auto* val = builder.CreateExtractValue(call, 1, "ok.val");
+        builder.CreateBr(endBB);
+
+        builder.SetInsertPoint(catchBB);
         if (node->right->left) genNode(node->right->left);
-        ir.emitLine("br label %" + end_label);
-        ir.emitLine("");
-        ir.emitLine(end_label + ":");
-        // Return the extracted value in success case (stored in %tval)
-        return inner_type + " " + ir.tmp("%tval_phi_placeholder");
+        builder.CreateBr(endBB);
     } else {
-        // Propagate to caller
-        auto propagate_label = ir.label(".try.propagate");
-        ir.emitLine("br i1 " + flag + ", label %" + propagate_label + ", label %" + success_label);
-        ir.emitLine("");
-        ir.emitLine(success_label + ":");
-        auto val = ir.tmp("%tval");
-        ir.emitLine(val + " = extractvalue " + full_type + " " + call_reg + ", 1");
-        ir.emitLine("br label %" + end_label);
-        ir.emitLine("");
-        ir.emitLine(propagate_label + ":");
-        ir.emitLine("ret " + full_type + " " + call_reg);
-        has_return_emitted = true;
-        ir.emitLine("");
-        ir.emitLine(end_label + ":");
-        return inner_type + " " + val;
+        auto* propBB = BasicBlock::Create(ctx, "try.propagate", fn);
+        builder.CreateCondBr(flag, propBB, successBB);
+
+        builder.SetInsertPoint(propBB);
+        builder.CreateRet(call);
+        has_return = true;
+
+        builder.SetInsertPoint(successBB);
     }
+
+    builder.SetInsertPoint(endBB);
+    return builder.CreateExtractValue(call, 1, "try.val");
 }
 
-// ── resolveType: wraps typeToLLVM, resolves @Self ───────────────────────────
+// ── Union constructor ───────────────────────────────────────────────────────
 
-std::string Codegen::resolveType(ASTNode* type_node) {
-    if (!type_node) return "void";
-    if (type_node->node_type == ASTNodeType::VarType &&
-        type_node->token && type_node->token->value == "Self") {
-        return "%" + current_struct_name + "*";
+Value* IRGen::genUnionConstruct(ASTNode* node) {
+    if (!node || !node->left || !node->right) return Constant::getNullValue(Type::getInt32Ty(ctx));
+
+    auto& uname = node->left->token->value;
+    auto* call = node->right;
+    auto& vname = call->token->value;
+
+    auto uit = unions.find(uname);
+    if (uit == unions.end()) return Constant::getNullValue(Type::getInt32Ty(ctx));
+
+    UnionVariant* vi = nullptr;
+    for (auto& v : uit->second.variants) {
+        if (v.name == vname) { vi = &v; break; }
     }
-    return typeToLLVM(type_node);
-}
+    if (!vi) return Constant::getNullValue(Type::getInt32Ty(ctx));
 
-// ── getLLVMTypeSize ──────────────────────────────────────────────────────────
+    auto* union_ty = uit->second.ll_type;
+    auto* alloc = builder.CreateAlloca(union_ty);
 
-int Codegen::getLLVMTypeSize(const std::string& type_str) {
-    if (type_str == "i1" || type_str == "i8") return 1;
-    if (type_str == "i16" || type_str == "half") return 2;
-    if (type_str == "i32" || type_str == "float") return 4;
-    if (type_str == "i64" || type_str == "double" || type_str == "ptr" ||
-        type_str == "i8*" || type_str == "i32*") return 8;
-    if (type_str == "i128" || type_str == "fp128") return 16;
+    auto* tag_ptr = builder.CreateStructGEP(union_ty, alloc, 0, "tag.ptr");
+    builder.CreateStore(ConstantInt::get(Type::getInt32Ty(ctx), vi->tag), tag_ptr);
 
-    // Array: [N x T]
-    if (type_str.size() > 2 && type_str[0] == '[') {
-        auto xp = type_str.find(" x ");
-        if (xp != std::string::npos) {
-            int count = std::stoi(type_str.substr(1, xp - 1));
-            std::string elem = type_str.substr(xp + 3, type_str.size() - xp - 4);
-            return count * getLLVMTypeSize(elem);
-        }
-    }
-
-    // Struct: { T1, T2, ... } — simple parser
-    if (type_str.size() > 2 && type_str[0] == '{') {
-        int total = 0;
-        size_t depth = 0;
-        std::string cur;
-        for (size_t i = 1; i < type_str.size() - 1; i++) {
-            char c = type_str[i];
-            if (c == '{' || c == '[') depth++;
-            else if (c == '}' || c == ']') depth--;
-            else if (c == ',' && depth == 0) {
-                while (!cur.empty() && cur[0] == ' ') cur = cur.substr(1);
-                while (!cur.empty() && cur.back() == ' ') cur.pop_back();
-                if (!cur.empty()) total += getLLVMTypeSize(cur);
-                cur.clear();
-                continue;
+    if (vi->payload_type && !vi->payload_type->isVoidTy() &&
+        call->children && !call->children->empty()) {
+        auto* arg = (*call->children)[0];
+        if (arg->left) {
+            auto* val = genExpr(arg->left);
+            if (val) {
+                auto* payload_ptr = builder.CreateStructGEP(union_ty, alloc, 1, "payload.ptr");
+                auto* casted = builder.CreateBitCast(payload_ptr, PointerType::getUnqual(vi->payload_type));
+                builder.CreateStore(val, casted);
             }
-            cur += c;
         }
-        while (!cur.empty() && cur[0] == ' ') cur = cur.substr(1);
-        while (!cur.empty() && cur.back() == ' ') cur.pop_back();
-        if (!cur.empty()) total += getLLVMTypeSize(cur);
-        return total;
     }
 
-    // named struct %Name: estimate 64 bytes
-    if (!type_str.empty() && type_str == "i8**") return 8;
-    if (!type_str.empty() && type_str[0] == '%') return 64;
-
-    return 8;
+    return builder.CreateLoad(union_ty, alloc, "union.val");
 }
 
 } // namespace codegen

@@ -1,10 +1,11 @@
 CXX := clang++-20
-CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -g -O0
+CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -g -O0 \
+            $(shell llvm-config-20 --cxxflags | sed 's/-fno-exceptions//g; s/-funwind-tables//g')
+LDFLAGS := $(shell llvm-config-20 --ldflags --system-libs --libs core irreader bitwriter analysis transformutils passes support)
 SRCDIR := src
 BUILDDIR := build
 TARGET := razenc
 
-# Source files
 SRCS := $(SRCDIR)/main.cpp \
         $(SRCDIR)/lexer/lexer.cpp \
         $(SRCDIR)/ast/expression.cpp \
@@ -22,7 +23,7 @@ OBJS := $(SRCS:$(SRCDIR)/%.cpp=$(BUILDDIR)/%.o)
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILDDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(dir $@)

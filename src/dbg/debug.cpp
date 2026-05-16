@@ -2,6 +2,8 @@
 #include <iostream>
 #include <iomanip>
 #include <cstring>
+#include <fstream>
+#include <sys/stat.h>
 
 namespace razen {
 
@@ -336,6 +338,17 @@ void printAST(const std::vector<ASTNode*>& ast_nodes) {
         }
     }
     std::cout << "\n";
+}
+
+void writeIR(const std::string& label, const std::string& ir, bool success) {
+    mkdir("build/ir", 0755);
+    std::string path = "build/ir/" + label + ".ll";
+    std::ofstream f(path);
+    if (success && !ir.empty())
+        f << "; razenc — " << label << " — PASS\n";
+    else
+        f << "; razenc — " << label << " — SKIPPED (semantic error)\n";
+    f << ir;
 }
 
 } // namespace razen
