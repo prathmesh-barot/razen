@@ -22,12 +22,36 @@ struct CLIOpts {
     std::vector<std::string> files;
 };
 
+static void printHelp(const char* prog) {
+    std::cout << "Usage: " << prog << " [flags] [files...]\n\n"
+              << "Flags:\n"
+              << "  -h, --help       Print this help\n"
+              << "  --version        Print version\n"
+              << "  -v, --verbose    Full phase-by-phase debug output\n"
+              << "  --debug          Alias for --verbose\n"
+              << "  -f, --files      Treat remaining args as files\n"
+              << "\n"
+              << "With no files, compiles 10 built-in samples.\n"
+              << "Otherwise compiles each .rzn file, emits output/<name>.o/.s\n";
+}
+
+static void printVersion() {
+    std::cout << "razenc v" << codegen::Codegen::CODEGEN_VERSION
+              << " (LLVM 20, x86-64)\n";
+}
+
 static CLIOpts parseArgs(int argc, char** argv) {
     CLIOpts opts;
     bool in_files = false;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if (arg == "--verbose" || arg == "-v" || arg == "--debug") {
+        if (arg == "-h" || arg == "--help") {
+            printHelp(argv[0]);
+            std::exit(0);
+        } else if (arg == "--version") {
+            printVersion();
+            std::exit(0);
+        } else if (arg == "--verbose" || arg == "-v" || arg == "--debug") {
             opts.verbose = true;
         } else if (arg == "-f" || arg == "--files") {
             in_files = true;

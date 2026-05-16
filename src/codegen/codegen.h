@@ -22,7 +22,7 @@ struct Codegen {
     bool emitAssembly(const std::string& path);
     std::string getIR() { return ir.dumpIR(); }
 
-    static constexpr int CODEGEN_VERSION = 2;
+    static constexpr int CODEGEN_VERSION = 3;
 };
 
 } // namespace codegen
