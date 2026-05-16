@@ -36,7 +36,7 @@ static void printHelp(const char* prog) {
 }
 
 static void printVersion() {
-    std::cout << "razenc v" << codegen::Codegen::CODEGEN_VERSION
+    std::cout << "razenc " << codegen::Codegen::CODEGEN_VERSION
               << " (LLVM 20, x86-64)\n";
 }
 
