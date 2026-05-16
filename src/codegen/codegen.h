@@ -17,7 +17,12 @@ struct Codegen {
     Codegen& operator=(Codegen&&) = delete;
 
     void generate(const std::vector<ASTNode*>& nodes);
+    void optimize();
+    bool emitObject(const std::string& path);
+    bool emitAssembly(const std::string& path);
     std::string getIR() { return ir.dumpIR(); }
+
+    static constexpr int CODEGEN_VERSION = 2;
 };
 
 } // namespace codegen

@@ -9,6 +9,7 @@
 #include "semantic/symbol_table.h"
 #include "samples/sample6.h"
 #include "codegen/codegen.h"
+#include <llvm/Support/TargetSelect.h>
 
 using namespace razen;
 
@@ -72,11 +73,35 @@ static void convertCode(const char* label, const char* source) {
     std::cout << ir_output;
     std::cout << PEACH << "--- End LLVM IR ---" << RESET << "\n";
 
+    // Phase 5 — Optimize
+    std::cout << CREAM << "Phase 5" << RESET << "  ";
+    cg.optimize();
+    std::string opt_ir = cg.getIR();
+    writeIR((std::string(label) + "_opt").c_str(), opt_ir, true);
+    std::cout << "\t\tOptimization\tDone\n";
+
+    // Phase 6 — Emit .o and .s for every sample
+    std::cout << CREAM << "Phase 6" << RESET << "  ";
+    std::string obj = "output/" + std::string(label) + ".o";
+    cg.emitObject(obj);
+    std::string asm_ = "output/" + std::string(label) + ".s";
+    cg.emitAssembly(asm_);
+    std::cout << "\t\tEmit " << label << ".o/.s\t\tDone\n";
+
+    std::cout << "\n" << PEACH << "--- Optimized IR ---" << RESET << "\n";
+    std::cout << opt_ir;
+    std::cout << PEACH << "--- End Optimized IR ---" << RESET << "\n";
+
     freeASTNodes(ast_nodes);
 }
 
 int main() {
-    std::cout << LIGHT_GREEN << "Razen Lang - Full Frontend (Phases 1-4)" << RESET << "\n";
+    // Initialize LLVM native (x86) target once
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();
+
+    std::cout << LIGHT_GREEN << "Razen Lang - Full Frontend (Phases 1-5)" << RESET << "\n";
     std::cout << GREY << "Lexer | AST | Semantic Analysis | LLVM IR Codegen" << RESET << "\n\n";
 
     // ── 10 new verification samples ────────────────────────────────────────

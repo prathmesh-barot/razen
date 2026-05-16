@@ -6,6 +6,15 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/GlobalValue.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/TargetSelect.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/Target/TargetOptions.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Transforms/Utils/Mem2Reg.h>
+#include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <iostream>
 
 using namespace llvm;
@@ -942,6 +951,8 @@ Value* IRGen::genUnary(ASTNode* node) {
             load_ty = ai->getAllocatedType();
         else if (auto* li = dyn_cast<LoadInst>(inner))
             load_ty = li->getType();
+        else if (auto* gep = dyn_cast<GetElementPtrInst>(inner))
+            load_ty = gep->getResultElementType();
         return builder.CreateLoad(load_ty, inner, "deref");
     }
     return inner;
@@ -1321,6 +1332,83 @@ Value* IRGen::genUnionConstruct(ASTNode* node) {
     }
 
     return builder.CreateLoad(union_ty, alloc, "union.val");
+}
+
+// ── Optimization pipeline (mem2reg + instcombine) ──────────────────────────
+
+void Codegen::optimize() {
+    auto& mod = ir.module;
+
+    llvm::LoopAnalysisManager LAM;
+    llvm::FunctionAnalysisManager FAM;
+    llvm::CGSCCAnalysisManager CGAM;
+    llvm::ModuleAnalysisManager MAM;
+
+    llvm::PassBuilder PB;
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+    // Verify before optimization
+    for (auto& F : mod) {
+        if (!F.isDeclaration()) {
+            std::string err;
+            raw_string_ostream err_os(err);
+            if (verifyFunction(F, &err_os)) {
+                llvm::errs() << "Pre-opt verify error in " << F.getName() << ": " << err << "\n";
+            }
+        }
+    }
+
+    llvm::FunctionPassManager FPM;
+    FPM.addPass(llvm::PromotePass());
+    FPM.addPass(llvm::InstCombinePass());
+
+    llvm::ModulePassManager MPM;
+    MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
+    MPM.run(mod, MAM);
+}
+
+// ── Object file emission ────────────────────────────────────────────────────
+
+static bool emitFile(const std::string& path, llvm::Module& mod,
+                     llvm::CodeGenFileType fileType) {
+    std::string TripleStr = mod.getTargetTriple();
+    if (TripleStr.empty()) TripleStr = "x86_64-pc-linux-gnu";
+    mod.setTargetTriple(TripleStr);
+
+    std::string Error;
+    const llvm::Target* TheTarget = llvm::TargetRegistry::lookupTarget(TripleStr, Error);
+    if (!TheTarget) { llvm::errs() << Error << "\n"; return false; }
+
+    auto TM = std::unique_ptr<llvm::TargetMachine>(
+        TheTarget->createTargetMachine(TripleStr, "generic", "",
+                                       llvm::TargetOptions{},
+                                       std::optional(llvm::Reloc::PIC_)));
+    if (!TM) return false;
+    mod.setDataLayout(TM->createDataLayout());
+
+    std::error_code EC;
+    llvm::raw_fd_ostream Out(path, EC, llvm::sys::fs::OF_None);
+    if (EC) { llvm::errs() << EC.message() << "\n"; return false; }
+
+    llvm::legacy::PassManager PM;
+    if (TM->addPassesToEmitFile(PM, Out, nullptr, fileType)) {
+        llvm::errs() << "Cannot emit file\n"; return false;
+    }
+    PM.run(mod);
+    Out.flush();
+    return true;
+}
+
+bool Codegen::emitObject(const std::string& path) {
+    return emitFile(path, ir.module, llvm::CodeGenFileType::ObjectFile);
+}
+
+bool Codegen::emitAssembly(const std::string& path) {
+    return emitFile(path, ir.module, llvm::CodeGenFileType::AssemblyFile);
 }
 
 } // namespace codegen

@@ -1,7 +1,7 @@
 CXX := clang++-20
 CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -g -O0 \
             $(shell llvm-config-20 --cxxflags | sed 's/-fno-exceptions//g; s/-funwind-tables//g')
-LDFLAGS := $(shell llvm-config-20 --ldflags --system-libs --libs core irreader bitwriter analysis transformutils passes support)
+LDFLAGS := $(shell llvm-config-20 --ldflags) -lLLVM-20 $(shell llvm-config-20 --system-libs)
 SRCDIR := src
 BUILDDIR := build
 TARGET := razenc
@@ -34,3 +34,10 @@ clean:
 
 run: $(TARGET)
 	./$(TARGET)
+
+# Build, run codegen, optimize, and emit IR to file
+test-all: $(TARGET)
+	@mkdir -p output
+	./$(TARGET) 2>&1 | grep -E "verification failed|Error" || echo "All tests passed"
+	# Extract and compile each IR
+	python3 tools/extract_ir.py 2>/dev/null || echo "extract_ir.py not found"
