@@ -20,3 +20,8 @@ Thumbs.db
 # Zig (if mixed)
 .zig-cache/
 zig-out/
+
+# Website (Next.js)
+website/razen/node_modules/
+website/razen/.next/
+website/razen/next-env.d.ts

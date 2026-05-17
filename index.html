@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Razen — Systems Language. No Hidden Magic.</title>
+<style>
+/* ── Maple Mono from Fontsource CDN ── */
+@font-face {
+  font-family: 'Maple Mono';
+  font-style: normal; font-display: swap; font-weight: 300;
+  src: url(https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-300-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Maple Mono';
+  font-style: normal; font-display: swap; font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Maple Mono';
+  font-style: normal; font-display: swap; font-weight: 700;
+  src: url(https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-700-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Maple Mono';
+  font-style: italic; font-display: swap; font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-italic.woff2) format('woff2');
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #080808;
+  --bg1:      #0f0f0f;
+  --bg2:      #141414;
+  --fg:       #c8c8c8;
+  --fg-dim:   #555;
+  --fg-mute:  #333;
+  --green:    #4eff91;
+  --amber:    #ffc940;
+  --red:      #ff5f6d;
+  --blue:     #5ab4ff;
+  --purple:   #b48eff;
+  --border:   rgba(255,255,255,0.07);
+  --kw: #b48eff;
+  --fn: #5ab4ff;
+  --ty: #ff9d6c;
+  --font:     'Maple Mono', 'Courier New', monospace;
+  --rb1: #ff3cac; --rb2: #ff8c00; --rb3: #ffed00;
+  --rb4: #2affa0; --rb5: #00d4ff; --rb6: #b44dff;
+}
+
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-x: hidden;
+}
+
+/* ── Scanline overlay ── */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.06) 2px,
+    rgba(0,0,0,0.06) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Rainbow bar ── */
+.rb-bar {
+  height: 2px;
+  background: linear-gradient(90deg,var(--rb1),var(--rb2),var(--rb3),var(--rb4),var(--rb5),var(--rb6),var(--rb1));
+  background-size: 200% 100%;
+  animation: rb-slide 4s linear infinite;
+}
+@keyframes rb-slide {
+  from { background-position: 0% 0%; }
+  to   { background-position: 200% 0%; }
+}
+
+/* ── Nav ── */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(8,8,8,0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  justify-content: space-between;
+  padding: 0 clamp(16px, 5vw, 48px);
+  height: 52px;
+}
+.nav-logo {
+  font-weight: 700; font-size: 16px;
+  display: flex; align-items: center; gap: 8px;
+  text-decoration: none; color: var(--fg);
+  letter-spacing: -0.02em;
+}
+.logo-mark {
+  width: 20px; height: 20px;
+  background: linear-gradient(135deg,var(--rb1),var(--rb5));
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: #fff; font-weight: 700;
+}
+.nav-links {
+  display: flex; gap: clamp(16px, 3vw, 32px); list-style: none;
+}
+.nav-links a {
+  color: var(--fg-dim); text-decoration: none; font-size: 13px;
+  transition: color .15s;
+}
+.nav-links a:hover { color: var(--fg); }
+.nav-right { display: flex; gap: 10px; align-items: center; }
+.btn-sm {
+  font-family: var(--font); font-size: 12px;
+  padding: 6px 14px; border-radius: 4px;
+  text-decoration: none; cursor: pointer;
+  transition: all .15s; border: 1px solid var(--border);
+  background: transparent; color: var(--fg-dim);
+}
+.btn-sm:hover { color: var(--fg); border-color: rgba(255,255,255,0.2); }
+.btn-sm.primary {
+  background: var(--fg); color: var(--bg);
+  border-color: var(--fg);
+}
+.btn-sm.primary:hover { background: #e0e0e0; }
+
+@media (max-width: 640px) {
+  .nav-links { display: none; }
+}
+
+/* ── Hero ── */
+.hero {
+  position: relative;
+  min-height: 92vh;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  text-align: center;
+  padding: clamp(60px, 10vh, 120px) clamp(16px, 5vw, 48px) clamp(40px, 6vh, 80px);
+  overflow: hidden;
+}
+#aurora {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
+.hero-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, black 20%, transparent 100%);
+}
+.hero-content { position: relative; z-index: 2; max-width: 780px; }
+
+.hero-tag {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 11px; color: var(--fg-dim);
+  border: 1px solid var(--border);
+  padding: 4px 12px; border-radius: 2px;
+  margin-bottom: 32px; letter-spacing: 0.08em;
+}
+.tag-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: blink 1.4s ease-in-out infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+
+h1.hero-title {
+  font-size: clamp(36px, 8vw, 88px);
+  font-weight: 700; line-height: 1.0;
+  letter-spacing: -0.04em;
+  margin-bottom: 24px;
+}
+.title-dim { color: var(--fg-dim); }
+.title-rb {
+  background: linear-gradient(90deg,var(--rb1),var(--rb2),var(--rb3),var(--rb4),var(--rb5));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+  background-size: 200% 100%;
+  animation: rb-slide 5s linear infinite;
+}
+
+.hero-sub {
+  font-size: clamp(13px, 2vw, 15px);
+  color: var(--fg-dim); max-width: 480px;
+  margin: 0 auto 40px; font-weight: 300;
+}
+
+.terminal-install {
+  display: inline-flex; align-items: center; gap: 12px;
+  background: var(--bg1); border: 1px solid var(--border);
+  border-radius: 4px; padding: 12px 20px;
+  font-size: clamp(12px, 2vw, 14px);
+  margin-bottom: 32px; cursor: pointer;
+  transition: border-color .2s;
+  width: 100%; max-width: 400px;
+}
+.terminal-install:hover { border-color: rgba(255,255,255,0.2); }
+.prompt { color: var(--green); user-select: none; }
+.cmd { color: var(--fg); flex: 1; text-align: left; }
+.copy-hint { color: var(--fg-mute); font-size: 11px; white-space: nowrap; }
+
+.hero-actions {
+  display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+}
+.btn-hero {
+  font-family: var(--font); font-size: 13px;
+  padding: 10px 22px; border-radius: 4px;
+  text-decoration: none; border: 1px solid var(--border);
+  transition: all .2s; color: var(--fg-dim); background: transparent;
+}
+.btn-hero:hover { color: var(--fg); border-color: rgba(255,255,255,0.2); background: rgba(255,255,255,0.03); }
+.btn-hero.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); font-weight: 700; }
+.btn-hero.primary:hover { background: #e0e0e0; }
+
+.hero-scroll {
+  position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: var(--fg-mute); letter-spacing: 0.1em;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.scroll-line {
+  width: 1px; height: 40px;
+  background: linear-gradient(to bottom, var(--fg-mute), transparent);
+  animation: scroll-drop 2s ease-in-out infinite;
+}
+@keyframes scroll-drop { 0%,100%{opacity:0;transform:scaleY(0);transform-origin:top} 50%{opacity:1;transform:scaleY(1)} }
+
+/* ── Section base ── */
+.section { padding: clamp(64px, 10vw, 100px) clamp(16px, 5vw, 64px); }
+.container { max-width: 1100px; margin: 0 auto; }
+
+.sec-label {
+  font-size: 11px; color: var(--fg-mute);
+  letter-spacing: 0.12em; margin-bottom: 12px;
+}
+.sec-title {
+  font-size: clamp(22px, 4vw, 36px);
+  font-weight: 700; letter-spacing: -0.03em;
+  margin-bottom: 8px; line-height: 1.1;
+}
+.sec-sub {
+  font-size: 13px; color: var(--fg-dim);
+  max-width: 460px; font-weight: 300;
+}
+
+/* ── Divider ── */
+.divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
+  margin: 0 clamp(16px, 5vw, 64px);
+}
+
+/* ── Features ── */
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden;
+  margin-top: 48px;
+}
+.feat {
+  background: var(--bg); padding: 28px 24px;
+  transition: background .2s;
+  position: relative;
+}
+.feat:hover { background: var(--bg1); }
+.feat::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg,var(--rb1),var(--rb2),var(--rb3),var(--rb4),var(--rb5),var(--rb6));
+  opacity: 0; transition: opacity .3s;
+}
+.feat:hover::before { opacity: 1; }
+.feat-icon { width: 28px; height: 28px; margin-bottom: 14px; display: flex; align-items: center; justify-content: center; }
+.feat-icon svg { width: 20px; height: 20px; stroke: var(--fg-dim); fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; transition: stroke .2s; }
+.feat:hover .feat-icon svg { stroke: var(--green); }
+.ic-icon { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; margin-top: 2px; flex-shrink: 0; }
+.ic-icon svg { width: 16px; height: 16px; stroke: var(--fg-dim); fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.feat-name { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+.feat-desc { font-size: 12px; color: var(--fg-dim); line-height: 1.6; font-weight: 300; }
+
+/* ── Code window ── */
+.code-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(32px, 5vw, 64px);
+  align-items: start;
+  margin-top: 48px;
+}
+@media (max-width: 768px) { .code-layout { grid-template-columns: 1fr; } }
+
+.terminal-window {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden;
+}
+.term-bar {
+  background: var(--bg2); padding: 10px 14px;
+  display: flex; align-items: center; gap: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.term-dot { width: 10px; height: 10px; border-radius: 50%; }
+.td-r { background: #ff5f6d; } .td-y { background: #ffc940; } .td-g { background: #4eff91; }
+.term-title { font-size: 11px; color: var(--fg-mute); margin-left: 6px; }
+.term-body { padding: 20px; font-size: 13px; line-height: 1.85; }
+.line { display: flex; gap: 8px; }
+.lnum { color: var(--fg-mute); user-select: none; min-width: 20px; text-align: right; }
+
+/* Syntax colors */
+.kw  { color: #b48eff; }
+.fn  { color: #5ab4ff; }
+.str { color: #4eff91; }
+.num { color: #ffc940; }
+.cm  { color: #444; font-style: italic; }
+.ty  { color: #ff9d6c; }
+.op  { color: #ff5f6d; }
+.sc  { color: var(--fg-dim); }
+
+/* ── Info cards ── */
+.info-cards {
+  display: flex; flex-direction: column; gap: 16px;
+}
+.info-card {
+  border: 1px solid var(--border);
+  border-radius: 4px; padding: 16px 18px;
+  background: var(--bg1);
+  display: flex; gap: 14px; align-items: flex-start;
+  transition: border-color .2s, background .2s;
+}
+.info-card:hover { background: var(--bg2); border-color: rgba(255,255,255,0.12); }
+.info-card:hover .ic-icon svg { stroke: var(--green); }
+.ic-title { font-weight: 700; font-size: 13px; margin-bottom: 3px; }
+.ic-desc  { font-size: 12px; color: var(--fg-dim); font-weight: 300; }
+
+/* ── Stats strip ── */
+.stats-strip {
+  background: var(--bg1);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.stats-inner {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  max-width: 1100px; margin: 0 auto;
+  padding: clamp(32px, 5vw, 52px) clamp(16px, 5vw, 64px);
+  gap: 32px;
+}
+.stat { text-align: center; }
+.stat-n {
+  font-size: clamp(28px, 5vw, 44px);
+  font-weight: 700; letter-spacing: -0.04em;
+  display: block; line-height: 1;
+  background: linear-gradient(90deg,var(--rb1),var(--rb5));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.stat-l { font-size: 11px; color: var(--fg-mute); margin-top: 6px; letter-spacing: 0.06em; }
+
+/* ── Why section ── */
+.why-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden;
+  margin-top: 48px;
+}
+.why-card {
+  background: var(--bg);
+  padding: 24px 22px;
+}
+.why-lang { font-size: 11px; color: var(--fg-mute); margin-bottom: 12px; }
+.why-rating {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.wr-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.wr-label { color: var(--fg-dim); width: 80px; flex-shrink: 0; }
+.wr-bar { flex: 1; height: 3px; background: var(--bg2); border-radius: 2px; overflow: hidden; }
+.wr-fill { height: 100%; border-radius: 2px; transition: width 1s ease; }
+.fill-g { background: var(--green); }
+.fill-a { background: var(--amber); }
+.fill-r { background: var(--red); }
+.fill-b { background: var(--blue); }
+.fill-rb {
+  background: linear-gradient(90deg,var(--rb1),var(--rb5));
+}
+.wr-val { font-size: 11px; color: var(--fg-mute); width: 28px; text-align: right; }
+
+/* ── Install section ── */
+.install-block {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden;
+  margin-top: 48px; max-width: 700px;
+}
+.install-tabs {
+  display: flex; border-bottom: 1px solid var(--border);
+}
+.tab {
+  padding: 10px 18px; font-size: 12px; color: var(--fg-mute);
+  cursor: pointer; transition: all .15s;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab.active { color: var(--fg); border-bottom-color: var(--green); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.install-cmd {
+  padding: 20px 24px; font-size: 13px; line-height: 2.0;
+}
+.iline { display: flex; align-items: center; gap: 10px; }
+.iline:hover .icopy { opacity: 1; }
+.icopy {
+  opacity: 0; font-size: 10px; color: var(--fg-mute);
+  cursor: pointer; transition: opacity .15s;
+  background: var(--bg2); border: 1px solid var(--border);
+  padding: 2px 8px; border-radius: 2px;
+}
+.icopy:hover { color: var(--fg); }
+
+/* ── CTA ── */
+.cta-section {
+  padding: clamp(64px, 10vw, 120px) clamp(16px, 5vw, 48px);
+  text-align: center;
+  position: relative; overflow: hidden;
+}
+.cta-glow {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 600px; height: 300px;
+  background: radial-gradient(ellipse, rgba(78,255,145,0.04) 0%, transparent 70%);
+  pointer-events: none;
+}
+.cta-title {
+  font-size: clamp(28px, 5vw, 52px);
+  font-weight: 700; letter-spacing: -0.03em;
+  margin-bottom: 14px; line-height: 1.05;
+}
+.cta-sub { font-size: 13px; color: var(--fg-dim); margin-bottom: 32px; font-weight: 300; }
+.cta-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+/* ── Footer ── */
+footer {
+  border-top: 1px solid var(--border);
+  padding: clamp(32px, 5vw, 52px) clamp(16px, 5vw, 48px);
+}
+.footer-inner {
+  max-width: 1100px; margin: 0 auto;
+  display: grid;
+  grid-template-columns: 2fr repeat(3, 1fr);
+  gap: clamp(24px, 4vw, 48px);
+}
+@media (max-width: 700px) {
+  .footer-inner { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 400px) {
+  .footer-inner { grid-template-columns: 1fr; }
+}
+.footer-brand p { font-size: 12px; color: var(--fg-mute); margin-top: 10px; font-weight: 300; line-height: 1.6; max-width: 220px; }
+.f-col h4 { font-size: 11px; color: var(--fg-dim); margin-bottom: 14px; letter-spacing: 0.06em; }
+.f-col ul { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.f-col a { font-size: 12px; color: var(--fg-mute); text-decoration: none; transition: color .15s; }
+.f-col a:hover { color: var(--fg); }
+.footer-bottom {
+  max-width: 1100px; margin: 32px auto 0;
+  padding-top: 20px; border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 12px;
+}
+.footer-copy { font-size: 11px; color: var(--fg-mute); }
+
+/* ── Ticker ── */
+.ticker-wrap { overflow: hidden; border-bottom: 1px solid var(--border); background: var(--bg1); padding: 12px 0; }
+.ticker { display: flex; animation: tick 25s linear infinite; width: max-content; }
+.ticker-item { font-size: 11px; color: var(--fg-mute); padding: 0 28px; white-space: nowrap; letter-spacing: 0.06em; }
+.ticker-item span { color: var(--fg-dim); }
+@keyframes tick { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+/* ── Blinking cursor ── */
+.cur { display: inline-block; width: 2px; height: 1em; background: var(--green); animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 2px; }
+
+/* ── Reveal on scroll ── */
+.fade-up { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
+.fade-up.in { opacity: 1; transform: none; }
+</style>
+</head>
+<body>
+
+<!-- Rainbow top bar -->
+<div class="rb-bar"></div>
+
+<!-- Nav -->
+<nav>
+  <a href="#" class="nav-logo">
+    <span class="logo-mark">Rz</span>
+    razen
+  </a>
+  <ul class="nav-links">
+    <li><a href="#">docs</a></li>
+    <li><a href="#">playground</a></li>
+    <li><a href="#">packages</a></li>
+    <li><a href="#">blog</a></li>
+    <li><a href="#">github</a></li>
+  </ul>
+  <div class="nav-right">
+    <a href="#" class="btn-sm">log in</a>
+    <a href="#" class="btn-sm primary">get started</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <canvas id="aurora"></canvas>
+  <div class="hero-grid"></div>
+  <div class="hero-content">
+    <div class="hero-tag">
+      <span class="tag-dot"></span>
+      razen — experimental · lexer, parser &amp; semantic analyzer complete
+    </div>
+    <h1 class="hero-title">
+      <span class="title-dim">the language</span><br>
+      <span class="title-rb">built different</span>
+    </h1>
+    <p class="hero-sub">
+      Razen is a systems language: no hidden allocations, no implicit casts, predictable control flow, compile-time evaluation. The code you write is the code that executes.
+    </p>
+    <div class="terminal-install" onclick="copyInstall(this)">
+      <span class="prompt">$</span>
+      <span class="cmd">curl -fsSL razen.dev/install | sh</span>
+      <span class="copy-hint">click to copy</span>
+    </div>
+    <div class="hero-actions">
+      <a href="#" class="btn-hero primary">→ read the docs</a>
+      <a href="#" class="btn-hero">try in browser</a>
+      <a href="#" class="btn-hero">★ star on github</a>
+    </div>
+  </div>
+  <div class="hero-scroll">
+    <div class="scroll-line"></div>
+  </div>
+</section>
+
+<!-- Ticker -->
+<div class="ticker-wrap">
+  <div class="ticker">
+    <span class="ticker-item">no hidden allocs <span>·</span></span>
+    <span class="ticker-item">no implicit casts <span>·</span></span>
+    <span class="ticker-item">compiles via llvm <span>·</span></span>
+    <span class="ticker-item">union types <span>·</span></span>
+    <span class="ticker-item">exhaustive match <span>·</span></span>
+    <span class="ticker-item">no garbage collector <span>·</span></span>
+    <span class="ticker-item">behaviours (traits) <span>·</span></span>
+    <span class="ticker-item">error!T unions <span>·</span></span>
+    <span class="ticker-item">explicit allocators <span>·</span></span>
+    <span class="ticker-item">comptime evaluation <span>·</span></span>
+    <span class="ticker-item">no hidden allocs <span>·</span></span>
+    <span class="ticker-item">no implicit casts <span>·</span></span>
+    <span class="ticker-item">compiles via llvm <span>·</span></span>
+    <span class="ticker-item">union types <span>·</span></span>
+    <span class="ticker-item">exhaustive match <span>·</span></span>
+    <span class="ticker-item">no garbage collector <span>·</span></span>
+    <span class="ticker-item">behaviours (traits) <span>·</span></span>
+    <span class="ticker-item">error!T unions <span>·</span></span>
+    <span class="ticker-item">explicit allocators <span>·</span></span>
+    <span class="ticker-item">comptime evaluation <span>·</span></span>
+  </div>
+</div>
+
+<!-- Features -->
+<section class="section">
+  <div class="container">
+    <div class="fade-up">
+      <div class="sec-label">// features</div>
+      <h2 class="sec-title">what makes razen, razen.</h2>
+      <p class="sec-sub">for engineers who want Rust's safety without the borrow checker, Zig's explicitness with more convenience, C's performance without the footguns.</p>
+    </div>
+    <div class="features-grid fade-up">
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><polyline points="16 3 8 13 12 13 8 21"/></svg></div>
+        <div class="feat-name">compile-time everything</div>
+        <div class="feat-desc">Type checking, memory analysis, null safety — all resolved before a single byte runs. <span style="color:var(--fg-mute)">const</span> and <span style="color:var(--fn)">const func</span> evaluate at comptime. Zero runtime metaprogramming.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
+        <div class="feat-name">algebraic data types</div>
+        <div class="feat-desc">Unions, structs, enums — sum and product types as first-class citizens. Exhaustive pattern matching with <span style="color:var(--kw)">match</span>. Model your domain precisely.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+        <div class="feat-name">no nulls. ever.</div>
+        <div class="feat-desc">Null is replaced by <span style="color:var(--ty)">?T</span> optionals. Nullable pointers are <span style="color:var(--ty)">?*T</span>. The compiler enforces every unwrap. No null pointer exceptions, by construction.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="15" x2="23" y2="15"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="15" x2="4" y2="15"/></svg></div>
+        <div class="feat-name">native performance</div>
+        <div class="feat-desc">Compiles to optimized machine code via LLVM. No VM, no JIT, no GC pauses. Zero-cost abstractions — high-level code emits the instructions you'd write by hand.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></div>
+        <div class="feat-name">raze package manager</div>
+        <div class="feat-desc">Single binary. Add packages with <span style="color:var(--green)">raze add</span>, build with <span style="color:var(--green)">raze build --release</span>. Deterministic builds. Lockfiles that actually work.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></div>
+        <div class="feat-name">readable syntax</div>
+        <div class="feat-desc">Every construct has exactly one job. No ambiguous syntax, no context-dependent behavior. <span style="color:var(--kw)">func</span> <span style="color:var(--kw)">ret</span> <span style="color:var(--kw)">match</span> — words that mean what they say.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- Code + Info -->
+<section class="section">
+  <div class="container">
+    <div class="fade-up">
+      <div class="sec-label">// syntax</div>
+      <h2 class="sec-title">code that reads like thought.</h2>
+      <p class="sec-sub" style="max-width:520px">Every construct has one job. <span style="color:var(--kw)">func</span> declares. <span style="color:var(--kw)">ret</span> returns. <span style="color:var(--kw)">match</span> is exhaustive. <span style="color:var(--kw)">:=</span> infers. No surprises.</p>
+    </div>
+    <div class="code-layout fade-up">
+      <!-- Terminal window -->
+      <div class="terminal-window">
+        <div class="term-bar">
+          <span class="term-dot td-r"></span>
+          <span class="term-dot td-y"></span>
+          <span class="term-dot td-g"></span>
+          <span class="term-title">main.rz — razen</span>
+        </div>
+        <div class="term-body">
+          <div class="line"><span class="lnum">1</span><span class="cm">// Razen — unions, matching, error handling</span></div>
+          <div class="line"><span class="lnum">2</span></div>
+          <div class="line"><span class="lnum">3</span><span class="kw">use</span> <span class="sc">fmt</span></div>
+          <div class="line"><span class="lnum">4</span></div>
+          <div class="line"><span class="lnum">5</span><span class="kw">union</span> <span class="ty">Shape</span> <span class="sc">{</span></div>
+          <div class="line"><span class="lnum">6</span>&nbsp;&nbsp;<span class="ty">Circle</span><span class="sc">(</span><span class="ty">f64</span><span class="sc">),</span></div>
+          <div class="line"><span class="lnum">7</span>&nbsp;&nbsp;<span class="ty">Rect</span><span class="sc">(</span><span class="ty">f64</span><span class="sc">, </span><span class="ty">f64</span><span class="sc">),</span></div>
+          <div class="line"><span class="lnum">8</span><span class="sc">}</span></div>
+          <div class="line"><span class="lnum">9</span></div>
+          <div class="line"><span class="lnum">10</span><span class="kw">func</span> <span class="fn">area</span><span class="sc">(s: </span><span class="ty">Shape</span><span class="sc">) -> </span><span class="ty">f64</span> <span class="sc">{</span></div>
+          <div class="line"><span class="lnum">11</span>&nbsp;&nbsp;<span class="kw">match</span> <span class="sc">s {</span></div>
+          <div class="line"><span class="lnum">12</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">Circle</span><span class="sc">(r) => </span><span class="num">3.14159</span><span class="sc"> * r * r,</span></div>
+          <div class="line"><span class="lnum">13</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">Rect</span><span class="sc">(w, h) => w * h,</span></div>
+          <div class="line"><span class="lnum">14</span>&nbsp;&nbsp;<span class="sc">}</span></div>
+          <div class="line"><span class="lnum">15</span><span class="sc">}</span></div>
+          <div class="line"><span class="lnum">16</span></div>
+          <div class="line"><span class="lnum">17</span><span class="kw">error</span> <span class="ty">AppError</span> <span class="sc">{ </span><span class="ty">InvalidInput</span><span class="sc">, </span><span class="ty">Overflow</span><span class="sc"> }</span></div>
+          <div class="line"><span class="lnum">18</span></div>
+          <div class="line"><span class="lnum">19</span><span class="kw">func</span> <span class="fn">main</span><span class="sc">() -> </span><span class="ty">AppError</span><span class="sc">!</span><span class="ty">void</span> <span class="sc">{</span></div>
+          <div class="line"><span class="lnum">20</span>&nbsp;&nbsp;<span class="sc">c := </span><span class="ty">Shape</span><span class="sc">.</span><span class="ty">Circle</span><span class="sc">(</span><span class="num">5.0</span><span class="sc">)</span></div>
+          <div class="line"><span class="lnum">21</span>&nbsp;&nbsp;<span class="fn">fmt.println</span><span class="sc">(</span><span class="str">"area = {}"</span><span class="sc">, .{area(c)})</span></div>
+          <div class="line"><span class="lnum">22</span>&nbsp;&nbsp;<span class="kw">ret</span></div>
+          <div class="line"><span class="lnum">23</span><span class="sc">}</span></div>
+        </div>
+      </div>
+
+      <!-- Info cards -->
+      <div class="info-cards">
+        <div class="info-card">
+          <div class="ic-icon"><svg viewBox="0 0 24 24"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4m0 0h18"/></svg></div>
+          <div>
+            <div class="ic-title">exhaustive matching</div>
+            <div class="ic-desc">The compiler verifies every branch is handled. Add a union variant, the compiler flags every unhandled <span style="color:var(--fn)">match</span> site.</div>
+          </div>
+        </div>
+        <div class="info-card">
+          <div class="ic-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+          <div>
+            <div class="ic-title">errors are values</div>
+            <div class="ic-desc">No exceptions. <span style="color:var(--ty)">Error!T</span> forces callers to handle failure. <span style="color:var(--kw)">try</span> propagates, <span style="color:var(--kw)">catch</span> handles. No hidden control flow.</div>
+          </div>
+        </div>
+        <div class="info-card">
+          <div class="ic-icon"><svg viewBox="0 0 24 24"><path d="M14.5 10c-.83 0-1.5-.67-1.5-1.5v-5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5z"/><path d="M20.5 10H19V8.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/><path d="M9.5 14c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5S8 21.33 8 20.5v-5c0-.83.67-1.5 1.5-1.5z"/><path d="M3.5 14H5v1.5c0 .83-.67 1.5-1.5 1.5S2 16.33 2 15.5 2.67 14 3.5 14z"/><path d="M14 14.5c0-.83.67-1.5 1.5-1.5h5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-5c-.83 0-1.5-.67-1.5-1.5z"/><path d="M15.5 9H14V7.5"/><path d="M10 9.5c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5S2.17 8 3 8h5.5c.83 0 1.5.67 1.5 1.5z"/></svg></div>
+          <div>
+            <div class="ic-title">inferred, not guessed</div>
+            <div class="ic-desc">Type inference flows through the whole program. Annotate where it matters with <span style="color:var(--ty)">name : Type = expr</span>. Omit where it's obvious.</div>
+          </div>
+        </div>
+        <div class="info-card">
+          <div class="ic-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></div>
+          <div>
+            <div class="ic-title">explicit allocation</div>
+            <div class="ic-desc">No GC, no hidden <span style="color:var(--fn)">malloc</span>. Every heap op takes an allocator parameter: <span style="color:var(--ty)">@arena</span> <span style="color:var(--ty)">@pool</span> <span style="color:var(--ty)">@fixed</span>. You decide where memory lives.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Stats -->
+<div class="stats-strip">
+  <div class="stats-inner fade-up">
+    <div class="stat">
+      <span class="stat-n">0</span>
+      <div class="stat-l">// hidden allocs</div>
+    </div>
+    <div class="stat">
+      <span class="stat-n">0</span>
+      <div class="stat-l">// runtime exceptions</div>
+    </div>
+    <div class="stat">
+      <span class="stat-n">32k</span>
+      <div class="stat-l">// max int width (bits)</div>
+    </div>
+    <div class="stat">
+      <span class="stat-n">100%</span>
+      <div class="stat-l">// explicit type coverage</div>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- Why Razen comparison -->
+<section class="section">
+  <div class="container">
+    <div class="fade-up">
+      <div class="sec-label">// comparison</div>
+      <h2 class="sec-title">razen vs. the field.</h2>
+      <p class="sec-sub">not another clone. a synthesis of what works, none of what doesn't.</p>
+    </div>
+    <div class="why-grid fade-up">
+      <div class="why-card">
+        <div class="why-lang" style="color:var(--rb5)">// razen</div>
+        <div class="why-rating">
+          <div class="wr-row"><span class="wr-label">speed</span><div class="wr-bar"><div class="wr-fill fill-rb" style="width:96%"></div></div><span class="wr-val">96</span></div>
+          <div class="wr-row"><span class="wr-label">safety</span><div class="wr-bar"><div class="wr-fill fill-rb" style="width:98%"></div></div><span class="wr-val">98</span></div>
+          <div class="wr-row"><span class="wr-label">dx</span><div class="wr-bar"><div class="wr-fill fill-rb" style="width:94%"></div></div><span class="wr-val">94</span></div>
+          <div class="wr-row"><span class="wr-label">ergonomics</span><div class="wr-bar"><div class="wr-fill fill-rb" style="width:95%"></div></div><span class="wr-val">95</span></div>
+        </div>
+      </div>
+      <div class="why-card">
+        <div class="why-lang">// rust</div>
+        <div class="why-rating">
+          <div class="wr-row"><span class="wr-label">speed</span><div class="wr-bar"><div class="wr-fill fill-a" style="width:98%"></div></div><span class="wr-val">98</span></div>
+          <div class="wr-row"><span class="wr-label">safety</span><div class="wr-bar"><div class="wr-fill fill-a" style="width:99%"></div></div><span class="wr-val">99</span></div>
+          <div class="wr-row"><span class="wr-label">dx</span><div class="wr-bar"><div class="wr-fill fill-a" style="width:58%"></div></div><span class="wr-val">58</span></div>
+          <div class="wr-row"><span class="wr-label">ergonomics</span><div class="wr-bar"><div class="wr-fill fill-a" style="width:62%"></div></div><span class="wr-val">62</span></div>
+        </div>
+      </div>
+      <div class="why-card">
+        <div class="why-lang">// go</div>
+        <div class="why-rating">
+          <div class="wr-row"><span class="wr-label">speed</span><div class="wr-bar"><div class="wr-fill fill-g" style="width:82%"></div></div><span class="wr-val">82</span></div>
+          <div class="wr-row"><span class="wr-label">safety</span><div class="wr-bar"><div class="wr-fill fill-g" style="width:70%"></div></div><span class="wr-val">70</span></div>
+          <div class="wr-row"><span class="wr-label">dx</span><div class="wr-bar"><div class="wr-fill fill-g" style="width:86%"></div></div><span class="wr-val">86</span></div>
+          <div class="wr-row"><span class="wr-label">ergonomics</span><div class="wr-bar"><div class="wr-fill fill-g" style="width:80%"></div></div><span class="wr-val">80</span></div>
+        </div>
+      </div>
+      <div class="why-card">
+        <div class="why-lang">// zig</div>
+        <div class="why-rating">
+          <div class="wr-row"><span class="wr-label">speed</span><div class="wr-bar"><div class="wr-fill fill-b" style="width:97%"></div></div><span class="wr-val">97</span></div>
+          <div class="wr-row"><span class="wr-label">safety</span><div class="wr-bar"><div class="wr-fill fill-b" style="width:80%"></div></div><span class="wr-val">80</span></div>
+          <div class="wr-row"><span class="wr-label">dx</span><div class="wr-bar"><div class="wr-fill fill-b" style="width:72%"></div></div><span class="wr-val">72</span></div>
+          <div class="wr-row"><span class="wr-label">ergonomics</span><div class="wr-bar"><div class="wr-fill fill-b" style="width:68%"></div></div><span class="wr-val">68</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- Install -->
+<section class="section">
+  <div class="container">
+    <div class="fade-up">
+      <div class="sec-label">// install</div>
+      <h2 class="sec-title">one command. you're in.</h2>
+      <p class="sec-sub">works on linux, macos, windows. single binary. no dependencies.</p>
+    </div>
+    <div class="install-block fade-up">
+      <div class="install-tabs">
+        <div class="tab active" onclick="switchTab('unix',this)">unix / macos</div>
+        <div class="tab" onclick="switchTab('win',this)">windows</div>
+        <div class="tab" onclick="switchTab('cargo',this)">raze</div>
+      </div>
+      <div id="tab-unix" class="tab-content active">
+        <div class="install-cmd">
+          <div class="iline">
+            <span class="prompt">$</span>
+            <span style="color:var(--fg)">curl -fsSL razen.dev/install | sh</span>
+            <span class="icopy" onclick="copyText('curl -fsSL razen.dev/install | sh')">copy</span>
+          </div>
+          <div class="iline">
+            <span class="prompt">$</span>
+            <span style="color:var(--fg)">razen --version</span>
+            <span class="icopy" onclick="copyText('razen --version')">copy</span>
+          </div>
+          <div class="iline">
+            <span style="color:var(--fg-mute);padding-left:18px">razen 0.1.62 (stable)</span>
+          </div>
+        </div>
+      </div>
+      <div id="tab-win" class="tab-content">
+        <div class="install-cmd">
+          <div class="iline">
+            <span class="prompt" style="color:var(--blue)">PS&gt;</span>
+            <span style="color:var(--fg)">irm razen.dev/install.ps1 | iex</span>
+            <span class="icopy" onclick="copyText('irm razen.dev/install.ps1 | iex')">copy</span>
+          </div>
+          <div class="iline">
+            <span class="prompt" style="color:var(--blue)">PS&gt;</span>
+            <span style="color:var(--fg)">razen --version</span>
+          </div>
+          <div class="iline">
+            <span style="color:var(--fg-mute);padding-left:34px">razen 0.1.62 (stable)</span>
+          </div>
+        </div>
+      </div>
+      <div id="tab-cargo" class="tab-content">
+        <div class="install-cmd">
+          <div class="iline">
+            <span class="prompt">$</span>
+            <span style="color:var(--fg)">raze add http</span>
+            <span class="icopy" onclick="copyText('raze add http')">copy</span>
+          </div>
+          <div class="iline">
+            <span class="prompt">$</span>
+            <span style="color:var(--fg)">raze build --release</span>
+            <span class="icopy" onclick="copyText('raze build --release')">copy</span>
+          </div>
+          <div class="iline">
+            <span class="prompt">$</span>
+            <span style="color:var(--fg)">raze run</span>
+            <span class="icopy" onclick="copyText('raze run')">copy</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section fade-up">
+  <div class="cta-glow"></div>
+  <div class="rb-bar" style="position:absolute;top:0;left:0;right:0"></div>
+  <h2 class="cta-title">write the future.<span class="cur"></span></h2>
+  <p class="cta-sub">razen is free, open source, and early. lexer · parser · semantic analyzer — complete. llvm codegen — in progress.</p>
+  <div class="cta-actions">
+    <a href="#" class="btn-hero primary">→ get started</a>
+    <a href="#" class="btn-hero">read the spec</a>
+    <a href="#" class="btn-hero">join discord</a>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <div class="nav-logo" style="display:inline-flex">
+        <span class="logo-mark">Rz</span> razen
+      </div>
+      <p>meaningful, accurate, simple, maximum performance.</p>
+    </div>
+    <div class="f-col">
+      <h4>// learn</h4>
+      <ul>
+        <li><a href="#">quickstart</a></li>
+        <li><a href="#">language guide</a></li>
+        <li><a href="#">std library</a></li>
+        <li><a href="#">examples</a></li>
+      </ul>
+    </div>
+    <div class="f-col">
+      <h4>// tools</h4>
+      <ul>
+        <li><a href="#">playground</a></li>
+        <li><a href="#">lsp / editor</a></li>
+        <li><a href="#">raze cli</a></li>
+        <li><a href="#">formatter</a></li>
+      </ul>
+    </div>
+    <div class="f-col">
+      <h4>// community</h4>
+      <ul>
+        <li><a href="#">github</a></li>
+        <li><a href="#">discord</a></li>
+        <li><a href="#">rfcs</a></li>
+        <li><a href="#">contribute</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span class="footer-copy">© 2026 razen lang — MIT license</span>
+    <span class="footer-copy" style="color:var(--fg-mute)">made with <span style="color:var(--red)">♥</span> and too much coffee</span>
+  </div>
+</footer>
+
+<script>
+/* ─── WebGL Aurora Shader (simple + fast) ─── */
+(function() {
+  const canvas = document.getElementById('aurora');
+  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false });
+  if (!gl) return;
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    canvas.width  = canvas.offsetWidth  * dpr;
+    canvas.height = canvas.offsetHeight * dpr;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const vs = `attribute vec2 p; void main(){gl_Position=vec4(p,0,1);}`;
+  const fs = `
+    precision mediump float;
+    uniform float t;
+    uniform vec2  r;
+
+    vec3 hue(float h) {
+      float h6 = fract(h) * 6.0;
+      return clamp(vec3(
+        abs(h6 - 3.0) - 1.0,
+        2.0 - abs(h6 - 2.0),
+        2.0 - abs(h6 - 4.0)
+      ), 0.0, 1.0);
+    }
+
+    void main() {
+      vec2 uv = gl_FragCoord.xy / r;
+      uv.y = 1.0 - uv.y;
+
+      /* undulating bands */
+      float wave = sin(uv.x * 10.0 + t * 0.9) * 0.03
+                 + sin(uv.x * 4.0  - t * 0.6) * 0.05
+                 + sin(uv.x * 22.0 + t * 1.4) * 0.01;
+
+      float band = uv.y + wave;
+
+      /* rainbow hue across x + slow drift */
+      float h = fract(uv.x * 0.8 - t * 0.07);
+      vec3 col = hue(h);
+
+      /* intensity: bright near bottom, fade to nothing by 40% height */
+      float glow = exp(-band * 10.0) * 0.55;
+      /* soft side vignette */
+      glow *= 1.0 - pow(abs(uv.x - 0.5) * 1.8, 3.0);
+
+      gl_FragColor = vec4(col * glow, glow * 0.9);
+    }
+  `;
+
+  function mkShader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s); return s;
+  }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, mkShader(gl.VERTEX_SHADER, vs));
+  gl.attachShader(prog, mkShader(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(prog); gl.useProgram(prog);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'p');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+  const uT = gl.getUniformLocation(prog, 't');
+  const uR = gl.getUniformLocation(prog, 'r');
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  let start = null;
+  function frame(ts) {
+    if (!start) start = ts;
+    gl.clearColor(0,0,0,0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform1f(uT, (ts - start) / 1000);
+    gl.uniform2f(uR, canvas.width, canvas.height);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+/* ─── Tabs ─── */
+function switchTab(id, el) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  el.classList.add('active');
+}
+
+/* ─── Copy ─── */
+function copyText(text) {
+  navigator.clipboard.writeText(text).catch(() => {});
+}
+function copyInstall(el) {
+  copyText('curl -fsSL razen.dev/install | sh');
+  const h = el.querySelector('.copy-hint');
+  h.textContent = 'copied!'; h.style.color = 'var(--green)';
+  setTimeout(() => { h.textContent = 'click to copy'; h.style.color = ''; }, 2000);
+}
+
+/* ─── Scroll Reveal ─── */
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('in'); });
+}, { threshold: 0.08 });
+document.querySelectorAll('.fade-up').forEach(el => io.observe(el));
+</script>
+</body>
+</html>
