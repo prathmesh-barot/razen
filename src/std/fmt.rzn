@@ -1,0 +1,10 @@
+ext func printf(fmt: str, ...) -> int
+ext func puts(s: str) -> int
+
+pub func print(s: str) -> void {
+    printf("%s", s);
+}
+
+pub func println(s: str) -> void {
+    puts(s);
+}

@@ -15,6 +15,7 @@
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/Transforms/Utils/Mem2Reg.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
+#include <llvm/Transforms/Utils/ModuleUtils.h>
 #include <iostream>
 
 using namespace llvm;
@@ -101,7 +102,31 @@ void Codegen::generate(const std::vector<ASTNode*>& nodes) {
         }
     }
 
+    ir.emitGlobalCtors();
+
     verifyModule(mod, &errs());
+}
+
+// ── Global constructor emission ─────────────────────────────────────────────
+
+void IRGen::emitGlobalCtors() {
+    if (pending_global_inits.empty()) return;
+
+    auto* voidTy = Type::getVoidTy(ctx);
+    auto* fn = Function::Create(
+        FunctionType::get(voidTy, false),
+        Function::InternalLinkage, "__raz_global_init", module);
+    auto* bb = BasicBlock::Create(ctx, "entry", fn);
+    builder.SetInsertPoint(bb);
+
+    for (auto& [gv, init_node] : pending_global_inits) {
+        auto* val = genExpr(init_node);
+        if (val) builder.CreateStore(val, gv);
+    }
+
+    builder.CreateRetVoid();
+    appendToGlobalCtors(module, fn, 65535);
+    pending_global_inits.clear();
 }
 
 // ── IRGen top-level dispatch ────────────────────────────────────────────────
@@ -254,14 +279,20 @@ void IRGen::genExt(ASTNode* node) {
         ret = resolveType(node->left->left);
 
     std::vector<Type*> params;
+    bool is_vararg = false;
     if (node->middle && node->middle->children) {
         for (auto* p : *node->middle->children) {
-            if (p->node_type == ASTNodeType::Parameter)
+            if (p->node_type == ASTNodeType::Parameter) {
+                if (p->token && p->token->type == TokenType::DotDotDot) {
+                    is_vararg = true;
+                    continue;
+                }
                 params.push_back(p->left ? resolveType(p->left) : Type::getInt32Ty(ctx));
+            }
         }
     }
 
-    auto* ft = FunctionType::get(ret, params, false);
+    auto* ft = FunctionType::get(ret, params, is_vararg);
     module.getOrInsertFunction(name, ft);
 }
 
@@ -295,6 +326,7 @@ void IRGen::genFunc(ASTNode* node) {
     deferred.clear();
     has_return = false;
     current_func_name = name;
+    current_llvm_function = fn;
 
     auto* entry = BasicBlock::Create(ctx, "entry", fn);
     builder.SetInsertPoint(entry);
@@ -335,6 +367,39 @@ void IRGen::genFunc(ASTNode* node) {
     named_types.clear();
     deferred.clear();
     current_ret_type = Type::getVoidTy(ctx);
+    current_llvm_function = nullptr;
+}
+
+// ── Constant helpers for global init ─────────────────────────────────────────
+
+static bool isConstantNode(ASTNode* node) {
+    if (!node) return false;
+    switch (node->node_type) {
+        case ASTNodeType::IntegerLiteral:
+        case ASTNodeType::FloatLiteral:
+        case ASTNodeType::BoolLiteral:
+        case ASTNodeType::CharLiteral:
+            return true;
+        default:
+            return false;
+    }
+}
+
+Value* IRGen::evalConstantNode(ASTNode* node) {
+    if (!node || !node->token) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    auto& val = node->token->value;
+    switch (node->node_type) {
+        case ASTNodeType::IntegerLiteral:
+            return ConstantInt::get(Type::getInt32Ty(ctx), std::stoll(val));
+        case ASTNodeType::FloatLiteral:
+            return ConstantFP::get(Type::getDoubleTy(ctx), val);
+        case ASTNodeType::BoolLiteral:
+            return val == "true" ? ConstantInt::getTrue(ctx) : ConstantInt::getFalse(ctx);
+        case ASTNodeType::CharLiteral:
+            return ConstantInt::get(Type::getInt8Ty(ctx), val.empty() ? 0 : (unsigned char)val[0]);
+        default:
+            return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    }
 }
 
 // ── Variable declaration ────────────────────────────────────────────────────
@@ -345,17 +410,19 @@ void IRGen::genVar(ASTNode* node, bool is_const) {
 
     Type* ty = node->left ? razenType(node->left) : nullptr;
 
-    auto* current_fn = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
-    if (!current_fn) {
+    if (!current_llvm_function) {
         if (!ty) ty = Type::getInt32Ty(ctx);
-        auto* init_val = node->right ? genExpr(node->right) : nullptr;
-        Constant* init_const = nullptr;
-        if (init_val) {
-            if (!ty) ty = init_val->getType();
-            init_const = dyn_cast<Constant>(init_val);
+        if (node->right && isConstantNode(node->right)) {
+            auto* val = evalConstantNode(node->right);
+            if (!ty) ty = val->getType();
+            new GlobalVariable(module, ty, is_const, GlobalValue::InternalLinkage,
+                              dyn_cast<Constant>(val), name);
+        } else {
+            if (!ty) ty = Type::getInt32Ty(ctx);
+            auto* gv = new GlobalVariable(module, ty, is_const, GlobalValue::InternalLinkage,
+                                          Constant::getNullValue(ty), name);
+            if (node->right) pending_global_inits.push_back({gv, node->right});
         }
-        if (!init_const) init_const = Constant::getNullValue(ty);
-        new GlobalVariable(module, ty, is_const, GlobalValue::InternalLinkage, init_const, name);
         return;
     }
 
@@ -364,14 +431,14 @@ void IRGen::genVar(ASTNode* node, bool is_const) {
         if (init) {
             if (!ty) ty = init->getType();
             if (!ty) ty = Type::getInt32Ty(ctx);
-            createEntryBlockAlloca(current_fn, name, ty);
+            createEntryBlockAlloca(current_llvm_function, name, ty);
             builder.CreateStore(init, named_values[name]);
             return;
         }
     }
 
     if (!ty) ty = Type::getInt32Ty(ctx);
-    createEntryBlockAlloca(current_fn, name, ty);
+    createEntryBlockAlloca(current_llvm_function, name, ty);
 
     if (!is_const && !node->right) {
         builder.CreateStore(Constant::getNullValue(ty), named_values[name]);
@@ -814,7 +881,14 @@ Value* IRGen::genLiteral(ASTNode* node) {
         case ASTNodeType::CharLiteral:
             return ConstantInt::get(Type::getInt8Ty(ctx), val.empty() ? 0 : (unsigned char)val[0]);
         case ASTNodeType::StringLiteral: {
-            auto* gv = builder.CreateGlobalString(val, ".str");
+            auto it = string_globals.find(val);
+            GlobalVariable* gv;
+            if (it != string_globals.end()) {
+                gv = it->second;
+            } else {
+                gv = builder.CreateGlobalString(val, ".str");
+                string_globals[val] = gv;
+            }
             auto* zero = ConstantInt::get(Type::getInt32Ty(ctx), 0);
             return builder.CreateGEP(gv->getValueType(), gv, {zero, zero}, "str.ptr");
         }
@@ -981,15 +1055,20 @@ Value* IRGen::genCall(ASTNode* node) {
     }
 
     std::vector<Value*> call_args;
-    for (size_t i = 0; i < args.size() && i < fn->arg_size(); i++) {
-        auto* expected = fn->getArg(i)->getType();
-        if (args[i]->getType() != expected) {
-            if (isIntTy(args[i]->getType()) && isIntTy(expected)) {
-                auto w1 = cast<IntegerType>(args[i]->getType())->getBitWidth();
-                auto w2 = cast<IntegerType>(expected)->getBitWidth();
-                if (w1 < w2) call_args.push_back(builder.CreateSExt(args[i], expected));
-                else if (w1 > w2) call_args.push_back(builder.CreateTrunc(args[i], expected));
-                else call_args.push_back(args[i]);
+    size_t named_params = fn->arg_size();
+    for (size_t i = 0; i < args.size(); i++) {
+        if (i < named_params) {
+            auto* expected = fn->getArg(i)->getType();
+            if (args[i]->getType() != expected) {
+                if (isIntTy(args[i]->getType()) && isIntTy(expected)) {
+                    auto w1 = cast<IntegerType>(args[i]->getType())->getBitWidth();
+                    auto w2 = cast<IntegerType>(expected)->getBitWidth();
+                    if (w1 < w2) call_args.push_back(builder.CreateSExt(args[i], expected));
+                    else if (w1 > w2) call_args.push_back(builder.CreateTrunc(args[i], expected));
+                    else call_args.push_back(args[i]);
+                } else {
+                    call_args.push_back(args[i]);
+                }
             } else {
                 call_args.push_back(args[i]);
             }
@@ -1140,6 +1219,12 @@ union_path:
         node->right && node->right->node_type == ASTNodeType::FunctionCall) {
         auto& uname = node->left->token->value;
         if (unions.count(uname)) return genUnionConstruct(node);
+    }
+
+    // Module function call: fmt.print(...) / fmt.println(...)
+    if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token &&
+        node->right && node->right->node_type == ASTNodeType::FunctionCall) {
+        return genCall(node->right);
     }
 
     return ConstantInt::get(Type::getInt32Ty(ctx), 0);

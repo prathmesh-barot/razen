@@ -113,13 +113,32 @@ static bool compileSource(const std::string& label, const std::string& source,
     if (verbose) printAST(ast_nodes);
     ok("AST");
 
+    for (auto* node : ast_nodes) {
+        if (node->node_type == ASTNodeType::UseDeclaration &&
+            node->token && node->token->value == "std.fmt") {
+            std::string std_source = readFile("src/std/fmt.rzn");
+            if (!std_source.empty()) {
+                try {
+                    auto std_tokens = parseToTokens(std_source);
+                    auto std_nodes = buildAST(std_tokens, std_source);
+                    ast_nodes.insert(ast_nodes.begin(), std_nodes.begin(), std_nodes.end());
+                    if (verbose) std::cout << "  Injected std.fmt module\n";
+                } catch (const std::exception& e) {
+                    if (verbose) std::cout << "  Failed to load std.fmt: " << e.what() << "\n";
+                }
+            }
+            break;
+        }
+    }
+
     phase("Phase 3");
     auto* gs = new Scope();
     SymbolTable st(gs, gs);
     std::unordered_set<std::string> whitelist = {
-        "std", "self", "true", "false", "null",
-        "print", "println", "eprint", "eprintln",
-        "exit", "assert", "panic", "clock_ms", "clock_ns"
+        "std", "fmt", "self", "true", "false", "null",
+        "print", "println", "printf", "puts",
+        "eprint", "eprintln", "exit", "assert", "panic",
+        "clock_ms", "clock_ns"
     };
     Analyzer analyzer(gs, gs, std::move(whitelist), std::move(st));
     analyzer.analyze(ast_nodes);

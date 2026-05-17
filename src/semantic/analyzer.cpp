@@ -859,6 +859,14 @@ TypeInfo* Analyzer::anaMemberAccess(ASTNode* node) {
             return left_type;
         }
 
+        // Module function call: fmt.print(...)
+        if (left_type->category == TypeCategory::Any &&
+            node->left && node->left->node_type == ASTNodeType::Identifier &&
+            right_node->node_type == ASTNodeType::FunctionCall &&
+            undeclared_whitelist.count(node->left->token->value)) {
+            return anaFunctionCall(right_node);
+        }
+
         if (right_node->token) {
             auto& field_name = right_node->token->value;
 

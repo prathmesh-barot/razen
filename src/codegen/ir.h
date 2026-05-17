@@ -48,6 +48,7 @@ struct IRGen {
     llvm::BasicBlock* loop_end = nullptr;
     std::string current_func_name;
     llvm::Type* current_ret_type = nullptr;
+    llvm::Function* current_llvm_function = nullptr;
     bool has_return = false;
 
     // ── Deferred statements (LIFO flush at scope exit) ──
@@ -76,6 +77,17 @@ struct IRGen {
     // struct method list (for mangling)
     std::unordered_map<std::string, std::vector<ASTNode*>> struct_methods;
     std::string current_struct;
+
+    // ── Runtime global init tracking ──
+    struct GlobalInit {
+        llvm::GlobalVariable* gv;
+        ASTNode* init_node;
+    };
+    std::vector<GlobalInit> pending_global_inits;
+    void emitGlobalCtors();
+
+    // ── String literal dedup ──
+    std::unordered_map<std::string, llvm::GlobalVariable*> string_globals;
 
     explicit IRGen(const std::string& source = "main.rz")
         : module(source, ctx), builder(ctx) {}
@@ -123,6 +135,7 @@ struct IRGen {
     void storeVariable(const std::string& name, llvm::Value* val);
     llvm::Value* createGEP(llvm::Value* ptr, llvm::Type* ty, unsigned idx);
     llvm::Value* createStructGEP(llvm::Value* ptr, llvm::Type* ty, unsigned idx0, unsigned idx1);
+    llvm::Value* evalConstantNode(ASTNode* node);
 
     std::string dumpIR() { return dumpModule(module); }
     static std::string dumpModule(llvm::Module& m);
