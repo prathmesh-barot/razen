@@ -1,8 +1,0 @@
-// 030: External (FFI) function declaration
-ext func puts(s: str) -> i32
-ext func exit(code: i32) -> void
-
-pub func main() -> i32 {
-    puts("calling ext func")
-    ret 0
-}

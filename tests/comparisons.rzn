@@ -1,0 +1,15 @@
+ext func puts(s: *i8) -> i32
+
+pub func main() -> i32 {
+    x := 5
+    y := 10
+
+    if x < y  { puts("x < y") }
+    if x <= y { puts("x <= y") }
+    if y > x  { puts("y > x") }
+    if y >= x { puts("y >= x") }
+    if x == x { puts("x == x") }
+    if x != y { puts("x != y") }
+
+    ret 0
+}

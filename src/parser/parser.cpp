@@ -43,6 +43,23 @@ static ASTNode* finishExplicit(ASTData& d, const Token& name_tok, bool is_mut, b
 static void consumeSemi(ASTData& d);
 static ASTNode* parseTypeNodeWrapper(ASTData& d);
 
+// attach a struct literal { field = value, ... } after a type expression
+static ASTNode* maybeStructLiteral(ASTData& d, ASTNode* type_expr) {
+    if (d.hasMore()) {
+        Token maybe_brace = d.getToken();
+        if (maybe_brace.type == TokenType::LeftBrace) {
+            ASTNode* struct_body = parseBlock(d);
+            ASTNode* wrapper = createDefaultAstNode();
+            wrapper->node_type = ASTNodeType::BinaryExpression;
+            wrapper->token = Token{TokenType::LeftBrace, "{}", 0, 0};
+            wrapper->left = type_expr;
+            wrapper->right = struct_body;
+            return wrapper;
+        }
+    }
+    return type_expr;
+}
+
 // ── consume a ';' if present ───────────────────────────────────────────────
 
 static void consumeSemi(ASTData& d) {
@@ -62,8 +79,9 @@ std::vector<ASTNode*> buildAST(const std::vector<Token>& token_list, std::string
     if (show_parser_progress)
         std::cout << "\t" << GREY << "Formatting AST" << RESET << "\t\t\t";
 
+    std::vector<ASTNode*> result_nodes;
     ASTData ast_data;
-    ast_data.ast_nodes = new std::vector<ASTNode*>();
+    ast_data.ast_nodes = &result_nodes;
     ast_data.token_list = &token_list;
     ast_data.token_index = 0;
 
@@ -88,7 +106,12 @@ std::vector<ASTNode*> buildAST(const std::vector<Token>& token_list, std::string
                           << ast_data.error_token->value << "' ("
                           << static_cast<int>(ast_data.error_token->type) << ")\n";
             }
-            throw;
+            if (ast_data.error_function) {
+                std::cout << "\t" << GREY << "In:" << RESET << "      " << *ast_data.error_function << "\n";
+            }
+            // Error recovery: skip bad tokens instead of aborting
+            ast_data.token_index++;
+            continue;
         }
 
         if (before == ast_data.token_index) ast_data.token_index++;
@@ -97,7 +120,7 @@ std::vector<ASTNode*> buildAST(const std::vector<Token>& token_list, std::string
     if (show_parser_progress)
         std::cout << CYAN << "Done" << RESET << "\n";
 
-    return *ast_data.ast_nodes;
+    return result_nodes;
 }
 
 // ── top-level dispatcher ────────────────────────────────────────────────────
@@ -396,7 +419,14 @@ static void processStatement(ASTData& d, ASTNode* body) {
             break;
         }
         default: {
-            d.advance();
+            // Try to parse as expression statement
+            ASTNode* expr = parseBinaryExpr(d, 0);
+            if (expr) {
+                appendChild(body, expr);
+                consumeSemi(d);
+            } else {
+                d.advance();
+            }
             break;
         }
     }
@@ -475,6 +505,7 @@ static ASTNode* finishInferred(ASTData& d, const Token& name_tok, bool is_mut) {
         value = parseTryStatement(d);
     } else {
         value = parseBinaryExpr(d, 0);
+        value = maybeStructLiteral(d, value);
         consumeSemi(d);
     }
 
@@ -507,6 +538,7 @@ static ASTNode* finishExplicit(ASTData& d, const Token& name_tok, bool is_mut, b
                 n->right = parseTryStatement(d);
             } else {
                 n->right = parseBinaryExpr(d, 0);
+                n->right = maybeStructLiteral(d, n->right);
                 consumeSemi(d);
             }
         } else if (eq_or_semi.type == TokenType::Semicolon) {
@@ -545,16 +577,33 @@ static ASTNode* parseIdentifierStatement(ASTData& d, bool is_mut) {
     if (isAssignmentOperator(nxt_tt)) {
         return parseAssignment(d);
     }
-    // name(args…) function call
+    // name(args…) function call (possibly followed by struct literal {…})
     if (nxt_tt == TokenType::LeftParen) {
         d.advance();
         ASTNode* node = parseCallNode(d, name_tok);
+        node = maybeStructLiteral(d, node);
         consumeSemi(d);
         return node;
     }
 
+    // name { field = value, ... }  struct literal
+    if (nxt_tt == TokenType::LeftBrace) {
+        d.advance();
+        ASTNode* struct_expr = createDefaultAstNode();
+        struct_expr->node_type = ASTNodeType::Identifier;
+        struct_expr->token = name_tok;
+        ASTNode* struct_body = parseBlock(d);
+        ASTNode* wrapper = createDefaultAstNode();
+        wrapper->node_type = ASTNodeType::BinaryExpression;
+        wrapper->token = Token{TokenType::LeftBrace, "{}", 0, 0};
+        wrapper->left = struct_expr;
+        wrapper->right = struct_body;
+        return wrapper;
+    }
+
     // parse as binary expression (e.g. c.value += 1)
     ASTNode* expr = parseBinaryExpr(d, 0);
+    expr = maybeStructLiteral(d, expr);
 
     if (d.hasMore()) {
         Token maybe_op = d.getToken();
@@ -911,40 +960,48 @@ static ASTNode* parseLoop(ASTData& d) {
     loop_st->node_type = ASTNodeType::LoopStatement;
     loop_st->token = tok;
 
-    std::optional<Token> peek = d.peekToken(0);
-    if (peek && peek->type != TokenType::LeftBrace) {
-        // check for |item| { pattern
-        bool found_pipe = false;
-        size_t pipe_idx = 0;
-        for (size_t i = 0; d.token_index + i < d.token_list->size(); ++i) {
-            const Token& t = (*d.token_list)[d.token_index + i];
-            if (t.type == TokenType::LeftBrace) break;
-            if (t.type == TokenType::Or) {
-                size_t idx = d.token_index + i;
-                if (idx + 3 < d.token_list->size()) {
-                    if ((*d.token_list)[idx + 1].type == TokenType::Identifier &&
-                        (*d.token_list)[idx + 2].type == TokenType::Or &&
-                        (*d.token_list)[idx + 3].type == TokenType::LeftBrace)
+    // Check for iterator pattern: loop expr |item| { ... }
+    // Scan ahead to see if we have: expression | identifier | {
+    bool is_iterator = false;
+    if (d.hasMore()) {
+        std::optional<Token> p0 = d.peekToken(0);
+        if (p0 && p0->type != TokenType::LeftBrace) {
+            for (size_t i = 0; d.token_index + i < d.token_list->size(); ++i) {
+                const Token& t = (*d.token_list)[d.token_index + i];
+                if (t.type == TokenType::LeftBrace) break;
+                if (t.type == TokenType::Or && d.token_index + i + 2 < d.token_list->size()) {
+                    if ((*d.token_list)[d.token_index + i + 1].type == TokenType::Identifier &&
+                        (*d.token_list)[d.token_index + i + 2].type == TokenType::Or &&
+                        d.token_index + i + 3 < d.token_list->size() &&
+                        (*d.token_list)[d.token_index + i + 3].type == TokenType::LeftBrace)
                     {
-                        found_pipe = true;
-                        pipe_idx = idx;
+                        is_iterator = true;
                         break;
                     }
                 }
             }
         }
+    }
 
-        if (found_pipe) {
-            const_cast<Token&>((*d.token_list)[pipe_idx]).type = TokenType::Semicolon;
+    if (is_iterator) {
+        // Temporarily replace '|' with ';' so parseBinaryExpr stops at the pipe
+        // Save original types to restore after
+        size_t pipe_start = d.token_index;
+        while (pipe_start < d.token_list->size()) {
+            if ((*d.token_list)[pipe_start].type == TokenType::Or) break;
+            pipe_start++;
         }
+        TokenType saved_first_pipe = (*d.token_list)[pipe_start].type;
+        const_cast<Token&>((*d.token_list)[pipe_start]).type = TokenType::Semicolon;
+
         loop_st->left = parseBinaryExpr(d, 0);
-        if (found_pipe) {
-            const_cast<Token&>((*d.token_list)[pipe_idx]).type = TokenType::Or;
-        }
+
+        // Restore original pipe type
+        const_cast<Token&>((*d.token_list)[pipe_start]).type = saved_first_pipe;
 
         std::optional<Token> nx = d.peekToken(0);
         if (nx && nx->type == TokenType::Or) {
-            d.advance(); // |
+            d.advance(); // opening |
             Token item = d.getToken();
             if (item.type == TokenType::Identifier) {
                 ASTNode* item_n = createDefaultAstNode();
@@ -952,11 +1009,16 @@ static ASTNode* parseLoop(ASTData& d) {
                 item_n->token = item;
                 loop_st->middle = item_n;
                 d.advance();
-
                 std::optional<Token> nx2 = d.peekToken(0);
                 if (nx2 && nx2->type == TokenType::Or) d.advance();
-            } else {
-                d.advance();
+            }
+        }
+    } else {
+        // Condition (or none if immediate {)
+        if (d.hasMore()) {
+            std::optional<Token> p0 = d.peekToken(0);
+            if (p0 && p0->type != TokenType::LeftBrace) {
+                loop_st->left = parseBinaryExpr(d, 0);
             }
         }
     }
@@ -1330,6 +1392,7 @@ static ASTNode* parseEnum(ASTData& d, bool is_pub) {
 
     Token name_tok = d.getToken();
     if (name_tok.type != TokenType::Identifier && !isVarType(name_tok.type)) {
+        d.setError("Expected enum name", name_tok);
         throw AstError("Unexpected type");
     }
     d.advance();
@@ -1376,7 +1439,10 @@ static ASTNode* parseEnum(ASTData& d, bool is_pub) {
     }
 
     Token lb = d.getToken();
-    if (lb.type != TokenType::LeftBrace) throw AstError("Unexpected type");
+    if (lb.type != TokenType::LeftBrace) {
+        d.setError("Expected '{' for enum body", lb);
+        throw AstError("Unexpected type");
+    }
     d.advance();
 
     size_t guard = 0;
@@ -1453,6 +1519,7 @@ static ASTNode* parseUnion(ASTData& d, bool is_pub) {
 
     Token name_tok = d.getToken();
     if (name_tok.type != TokenType::Identifier && !isVarType(name_tok.type)) {
+        d.setError("Expected union name", name_tok);
         throw AstError("Unexpected type");
     }
     d.advance();
@@ -1488,7 +1555,10 @@ static ASTNode* parseUnion(ASTData& d, bool is_pub) {
     }
 
     Token lb = d.getToken();
-    if (lb.type != TokenType::LeftBrace) throw AstError("Unexpected type");
+    if (lb.type != TokenType::LeftBrace) {
+        d.setError("Expected '{' for union body", lb);
+        throw AstError("Unexpected type");
+    }
     d.advance();
 
     size_t guard = 0;
@@ -1602,6 +1672,7 @@ static ASTNode* parseErrorMap(ASTData& d) {
     d.advance();
     Token name_tok = d.getToken();
     if (name_tok.type != TokenType::Identifier && !isVarType(name_tok.type)) {
+        d.setError("Expected error set name", name_tok);
         throw AstError("Unexpected type");
     }
     d.advance();

@@ -1,7 +1,0 @@
-// 052: Using std.fmt module (injected via compiler)
-use std.fmt
-
-pub func main() -> i32 {
-    fmt.println("Hello from std.fmt!")
-    ret 0
-}

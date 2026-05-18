@@ -1,0 +1,338 @@
+// Razen Language — Complete Feature Demonstration
+// Covers: types, variables, constants, control flow,
+// functions, structs, enums, unions, error handling,
+// behaviours, generics, pointers, builtins, allocators,
+// defer, pattern matching.
+
+use std.fmt
+
+// ── Constants & Type Aliases ──
+const APP_NAME: str = "Razen Demo v1.0"
+const MAX_BUF: usize = 4096
+const PI: f64 = 3.14159
+type Age = u8
+type Score = f64
+
+// ── Error Sets ──
+error MathError {
+    DivisionByZero,
+    Overflow,
+    NegativeInput,
+}
+
+// ── Behaviours ──
+behave Describable {
+    func describe(self: @Self) -> void
+}
+
+behave Taggable {
+    needs tag: str,
+    func print_tag(self: @Self) -> void,
+}
+
+// ── Enums ──
+enum Color { Red, Green, Blue }
+
+enum HttpStatus: u16 {
+    Ok = 200,
+    NotFound = 404,
+    InternalError = 500,
+}
+
+enum Permission: u8 {
+    Read = 1 << 0,
+    Write = 1 << 1,
+    Execute = 1 << 2,
+}
+
+// ── Unions ──
+union Value {
+    Int(i64),
+    Float(f64),
+    Text(str),
+}
+
+union Shape {
+    Circle { radius: f64 },
+    Rectangle { width: f64, height: f64 },
+}
+
+// ── Structs ──
+struct User ~> Describable {
+    name: str,
+    age: Age,
+    email: str,
+
+    describe(self: *User) -> void {
+        fmt.println("User: {}, Age: {}, Email: {}", .{self.name, self.age, self.email})
+    }
+}
+
+struct Product ~> Taggable {
+    name: str,
+    tag: str,
+    price: f64,
+
+    print_tag(self: *Product) -> void {
+        fmt.println("[{}] {} — ${}", .{self.tag, self.name, self.price})
+    }
+}
+
+struct Counter {
+    mut value: int,
+    func increment(self: *Counter) -> void { self.value += 1 }
+    func get(self: *Counter) -> int { ret self.value }
+}
+
+// ── Generic Struct ──
+@Generic(T) struct Box { item: T }
+
+// ── Generic Functions ──
+@Generic(T) func identity(x: T) -> T { ret x }
+
+@Generic(T, E) func make_pair(first: T, second: E) -> .{T, E} {
+    ret .{first, second}
+}
+
+// ── Functions ──
+func factorial(n: u32) -> u32 {
+    if n == 0 { ret 1 }
+    ret n * factorial(n - 1)
+}
+
+func is_prime(x: int) -> bool {
+    if x < 2 { ret false }
+    mut i := 2
+    loop i * i <= x {
+        if x % i == 0 { ret false }
+        i += 1
+    }
+    ret true
+}
+
+func status_string(s: HttpStatus) -> str {
+    match s {
+        HttpStatus.Ok => ret "200 OK",
+        HttpStatus.NotFound => ret "404 Not Found",
+        HttpStatus.InternalError => ret "500 Internal Error",
+    }
+}
+
+func print_value(v: Value) -> void {
+    match v {
+        Value.Int(n) => fmt.println("  int: {}", .{n}),
+        Value.Float(f) => fmt.println("  float: {}", .{f}),
+        Value.Text(s) => fmt.println("  text: {}", .{s}),
+    }
+}
+
+func shape_area(s: Shape) -> f64 {
+    match s {
+        Shape.Circle { radius } => ret PI * radius * radius,
+        Shape.Rectangle { width, height } => ret width * height,
+    }
+}
+
+// ── Error Handling Functions ──
+func safe_divide(a: f64, b: f64) -> MathError!f64 {
+    if b == 0.0 { ret MathError.DivisionByZero }
+    if a < 0.0 { ret MathError.NegativeInput }
+    ret a / b
+}
+
+func compute_ratio(a: f64, b: f64) -> MathError!f64 {
+    const result := try safe_divide(a, b)
+    if result > 1000.0 { ret MathError.Overflow }
+    ret result
+}
+
+// ── Pointers & Const ──
+func swap(a: *int, b: *int) -> void {
+    temp := a.*
+    a.* = b.*
+    b.* = temp
+}
+
+const func square(x: int) -> int { ret x * x }
+
+// ── Main ──
+pub func main() -> void {
+    fmt.println("======= Razen Language Demo =======")
+
+    // ── Variables & Types ──
+    fmt.println("\n── Variables & Types ──")
+    name := "Razen"
+    mut count: int = 0
+    pi : f64 = 3.14159
+    is_ready : bool = true
+    letter : char = 'R'
+    count += 10
+    fmt.println("  str={} int={} f64={} bool={} char={}", .{name, count, pi, is_ready, letter})
+
+    user_age : Age = 25
+    rating : Score = 4.7
+    fmt.println("  Age={} Score={} MAX_BUF={} PI={}", .{user_age, rating, MAX_BUF, PI})
+
+    // ── Control Flow ──
+    fmt.println("\n── Control Flow ──")
+    temp := 30
+    if temp > 25 {
+        fmt.println("  Hot ({}°C)", .{temp})
+    } else if temp > 15 {
+        fmt.println("  Mild ({}°C)", .{temp})
+    } else {
+        fmt.println("  Cold ({}°C)", .{temp})
+    }
+
+    // Loop: infinite
+    mut i := 0
+    loop {
+        if i >= 3 { break }
+        fmt.println("  loop iteration {}", .{i})
+        i += 1
+    }
+
+    // Loop: conditional (while-like)
+    mut j := 3
+    loop j > 0 {
+        fmt.println("  countdown {}", .{j})
+        j -= 1
+    }
+
+    // Loop: iterator (for-like) with skip
+    items := [1, 2, 3, 4, 5]
+    fmt.println("  Iterating (skip evens):")
+    loop items |n| {
+        if n % 2 == 0 { skip }
+        fmt.println("    {}", .{n})
+    }
+
+    // ── Pattern Matching ──
+    fmt.println("\n── Pattern Matching ──")
+    code := 200
+    match code {
+        200 => fmt.println("  HTTP 200: OK"),
+        404 => fmt.println("  HTTP 404: Not Found"),
+        500 => fmt.println("  HTTP 500: Error"),
+        else => fmt.println("  HTTP {}: Unknown", .{code}),
+    }
+
+    // Match: enum
+    col := Color.Green
+    match col {
+        Color.Red => fmt.println("  Red"),
+        Color.Green => fmt.println("  Green"),
+        Color.Blue => fmt.println("  Blue"),
+    }
+
+    // Enum with backing type
+    status := HttpStatus.NotFound
+    fmt.println("  Status: {}", .{status_string(status)})
+
+    // Enum comparison
+    if col == Color.Green {
+        fmt.println("  Confirmed: green")
+    }
+
+    // Enum bit flags
+    perms := Permission.Read | Permission.Write
+    fmt.println("  Permissions: Read|Write")
+
+    // Match: union tuple variants
+    print_value(Value.Int(42))
+    print_value(Value.Float(3.14))
+    print_value(Value.Text("hello rizen"))
+
+    // Match: union struct variants
+    circle := Shape.Circle { radius = 5.0 }
+    fmt.println("  Circle area: {}", .{shape_area(circle)})
+
+    rect := Shape.Rectangle { width = 4.0, height = 6.0 }
+    fmt.println("  Rectangle area: {}", .{shape_area(rect)})
+
+    // ── Structs & Behaviours ──
+    fmt.println("\n── Structs & Behaviours ──")
+    user := User { name = "Alice", age = 30, email = "alice@example.com" }
+    user.describe()
+
+    product := Product { name = "Widget", tag = "gadget", price = 19.99 }
+    product.print_tag()
+
+    mut counter := Counter { value = 0 }
+    counter.increment()
+    counter.increment()
+    counter.increment()
+    fmt.println("  Counter: {}", .{counter.get()})
+
+    // ── Generics ──
+    fmt.println("\n── Generics ──")
+    ibox := Box(int){ item = 100 }
+    sbox := Box(str){ item = "generic" }
+    fmt.println("  Box<int>: {} | Box<str>: {}", .{ibox.item, sbox.item})
+    fmt.println("  identity(42) = {}", .{identity(42)})
+    fmt.println("  identity(\"hi\") = {}", .{identity("hi")})
+    fmt.println("  make_pair(\"hello\", 42)")
+
+    // ── Functions ──
+    fmt.println("\n── Functions ──")
+    fmt.println("  factorial(7) = {}", .{factorial(7)})
+    fmt.println("  const square(12) = {}", .{square(12)})
+
+    // ── Defer (LIFO) ──
+    defer fmt.println("  [defer 1] cleaning up resources")
+    defer {
+        fmt.println("  [defer 2] releasing handles")
+    }
+
+    // ── Error Handling ──
+    fmt.println("\n── Error Handling ──")
+    try {
+        result := safe_divide(10.0, 2.0)
+        fmt.println("  10 / 2 = {}", .{result})
+    } catch (e) {
+        fmt.println("  Error: {}", .{e})
+    }
+
+    try {
+        result := safe_divide(10.0, 0.0)
+        fmt.println("  Should not print")
+    } catch (e) {
+        fmt.println("  Caught: {}", .{e})
+    }
+
+    // Expression try with catch
+    const ratio := try compute_ratio(100.0, 3.0) catch |err| {
+        fmt.println("  Ratio failed: {}", .{err})
+        ret
+    }
+    fmt.println("  Ratio: {}", .{ratio})
+
+    // ── Pointers ──
+    fmt.println("\n── Pointers ──")
+    a := 10
+    b := 20
+    fmt.println("  Before swap: a={}, b={}", .{a, b})
+    swap(&a, &b)
+    fmt.println("  After swap:  a={}, b={}", .{a, b})
+
+    ptr := &a
+    fmt.println("  deref = {}", .{ptr.*})
+
+    // ── Tuples ──
+    tup := .{1, "two", 3.0, true}
+    fmt.println("  Tuple: .{{1, \"two\", 3.0, true}}")
+
+    // ── Builtins & Allocators ──
+    fmt.println("\n── Builtins ──")
+    fmt.println("  @SizeOf(int) = {} bytes", .{@SizeOf(int)})
+    fmt.println("  @SizeOf(f64) = {} bytes", .{@SizeOf(f64)})
+
+    alloc := @arena
+    defer alloc.deinit()
+    fmt.println("  @arena allocator acquired")
+
+    // ── Done ──
+    fmt.println("\n=====================================")
+    fmt.println("  Demo Complete!")
+    fmt.println("=====================================")
+}

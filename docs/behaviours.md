@@ -93,8 +93,8 @@ struct Animal ~> Dog, Cat {
     name: str,
     voice: str,
 
-    func dog_speak ~> Dog.speak(a: *Animal) { ... }
-    func cat_speak ~> Cat.speak(a: *Animal) { ... }
+    func dog_speak ~> Dog.speak(a: *Animal) -> void { ... }
+    func cat_speak ~> Cat.speak(a: *Animal) -> void { ... }
 }
 ```
 

@@ -1,8 +1,0 @@
-// 027: String literals
-ext func puts(s: str) -> i32
-
-pub func main() -> i32 {
-    s : str = "Hello, World!"
-    puts(s)
-    ret 0
-}

@@ -1,8 +1,0 @@
-// 023: Unary operators: -, !, ~, &
-pub func main() -> i32 {
-    x : i32 = 42
-    y := -x
-    z := ~x
-    p := &x
-    ret 0
-}

@@ -7,8 +7,6 @@
 
 namespace razen {
 
-static constexpr size_t MAX_LOOP = 10000;
-
 ASTNode* parsePrimary(ASTData& d) {
     if (!d.hasMore()) return nullptr;
 
@@ -188,6 +186,28 @@ ASTNode* parsePrimary(ASTData& d) {
             if (next && next->type == TokenType::LeftParen) {
                 return parseFunctionCallNode(d, tok);
             }
+            ASTNode* n = createDefaultAstNode();
+            n->node_type = ASTNodeType::Identifier;
+            n->token = tok;
+            return n;
+        }
+
+        // built-in type keywords used as values: int, str, bool, etc.
+        // (e.g. Box(str){ ... })
+        case TokenType::I1: case TokenType::I2: case TokenType::I4:
+        case TokenType::I8: case TokenType::I16: case TokenType::I32:
+        case TokenType::I64: case TokenType::I128: case TokenType::Isize:
+        case TokenType::Int:
+        case TokenType::U1: case TokenType::U2: case TokenType::U4:
+        case TokenType::U8: case TokenType::U16: case TokenType::U32:
+        case TokenType::U64: case TokenType::U128: case TokenType::Usize:
+        case TokenType::Uint:
+        case TokenType::F16: case TokenType::F32: case TokenType::F64:
+        case TokenType::F128: case TokenType::Float:
+        case TokenType::Bool: case TokenType::Char: case TokenType::Void:
+        case TokenType::Noret: case TokenType::Any: case TokenType::Str:
+        case TokenType::String: {
+            d.advance();
             ASTNode* n = createDefaultAstNode();
             n->node_type = ASTNodeType::Identifier;
             n->token = tok;

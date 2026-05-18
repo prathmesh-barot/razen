@@ -1,6 +1,0 @@
-// 028: Char literals (comparison not supported; use i32 instead)
-pub func main() -> i32 {
-    c1 : char = 'A'
-    c2 : char = 'z'
-    ret 0
-}

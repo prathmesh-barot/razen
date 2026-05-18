@@ -1,5 +1,0 @@
-// 042: Array literal [1, 2, 3]
-pub func main() -> i32 {
-    arr := [1, 2, 3, 4, 5]
-    ret 0
-}

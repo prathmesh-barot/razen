@@ -91,7 +91,7 @@ Used with error union types: `Name!T`.
 
 ```
 behave Name { 
-    func method(@Self) -> Type,
+    func method(s :@Self) -> Type,
     needs field: Type
 }
 ```

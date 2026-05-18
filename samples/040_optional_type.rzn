@@ -1,5 +1,0 @@
-// 040: Optional type ?T
-pub func main() -> i32 {
-    opt : ?i32
-    ret 0
-}

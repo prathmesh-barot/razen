@@ -1,7 +1,0 @@
-// 045: Unsigned type tracking (use := for inference to avoid literal type mismatch)
-pub func main() -> i32 {
-    a := 100
-    b := 200
-    c := a + b
-    ret 0
-}

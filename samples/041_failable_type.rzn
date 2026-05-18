@@ -1,5 +1,0 @@
-// 041: Failable types not fully supported in semantic analyzer yet
-pub func main() -> i32 {
-    x : i32 = 42
-    ret x
-}

@@ -16,7 +16,7 @@ The `@` prefix introduces annotations and compiler intrinsics. In expression pos
 ```razen
 @Self               // the implementing type in behave/struct methods
 @Type               // the type as a comptime value
-@Generic(T)         // generic parameter binding
+@Generic(T), @Generic(T, E)         // generic parameter binding
 @Dyn                // dynamic dispatch marker
 ```
 

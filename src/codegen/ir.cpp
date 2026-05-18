@@ -202,6 +202,48 @@ Value* IRGen::createStructGEP(Value* ptr, Type* ty, unsigned, unsigned idx1) {
                                         ConstantInt::get(Type::getInt32Ty(ctx), idx1)});
 }
 
+// ── Pointee type tracking (opaque ptr workaround) ──────────────────────────
+
+void IRGen::setPointeeType(Value* ptr, Type* ty) {
+    if (ptr && ty) pointee_types[ptr] = ty;
+}
+
+Type* IRGen::getPointeeType(Value* ptr) {
+    if (!ptr) return Type::getInt32Ty(ctx);
+    // Check our map first
+    auto it = pointee_types.find(ptr);
+    if (it != pointee_types.end()) return it->second;
+    // Try LLVM instruction introspection
+    if (auto* ai = dyn_cast<AllocaInst>(ptr))
+        return ai->getAllocatedType();
+    if (auto* gep = dyn_cast<GetElementPtrInst>(ptr))
+        return gep->getResultElementType();
+    if (auto* gv = dyn_cast<GlobalVariable>(ptr))
+        return gv->getValueType();
+    if (auto* li = dyn_cast<LoadInst>(ptr)) {
+        // If loading from a pointer, try to propagate pointee type
+        auto* src = li->getPointerOperand();
+        return getPointeeType(src);
+    }
+    // Fallback
+    return Type::getInt32Ty(ctx);
+}
+
+// ── Integer widening (signed/unsigned aware) ───────────────────────────────
+
+Value* IRGen::widenInt(Value* val, Type* target, bool is_unsigned) {
+    if (!val || !target || val->getType() == target) return val;
+    if (!isIntTy(val->getType()) || !isIntTy(target)) return val;
+    auto w1 = cast<IntegerType>(val->getType())->getBitWidth();
+    auto w2 = cast<IntegerType>(target)->getBitWidth();
+    if (w1 < w2) {
+        return is_unsigned ? builder.CreateZExt(val, target)
+                           : builder.CreateSExt(val, target);
+    }
+    if (w1 > w2) return builder.CreateTrunc(val, target);
+    return val;
+}
+
 // ── Module dumping ──────────────────────────────────────────────────────────
 
 std::string IRGen::dumpModule(Module& m) {

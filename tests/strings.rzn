@@ -1,0 +1,6 @@
+ext func puts(s: *i8) -> i32
+
+pub func main() -> i32 {
+    puts("hello, world")
+    ret 0
+}

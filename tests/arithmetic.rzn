@@ -1,0 +1,8 @@
+pub func main() -> i32 {
+    a := 10
+    b := 20
+    s := a + b
+    d := s - 5
+    m := d * 2
+    ret m
+}

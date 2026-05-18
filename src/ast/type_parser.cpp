@@ -149,6 +149,33 @@ ASTNode* parseTypeNode(ASTData& d) {
         return type_node;
     }
 
+    // tuple type .{T, E} or .{T}
+    if (tok.type == TokenType::Dot) {
+        Token next = d.getToken();
+        if (next.type == TokenType::LeftBrace) {
+            d.advance();
+            type_node->node_type = ASTNodeType::TupleLiteral;
+            type_node->token = tok;
+            type_node->children = createChildList();
+            while (d.hasMore()) {
+                Token cur = d.getToken();
+                if (cur.type == TokenType::RightBrace) {
+                    d.advance();
+                    break;
+                }
+                ASTNode* elem = parseTypeNode(d);
+                if (elem) type_node->children->push_back(elem);
+                if (d.hasMore()) {
+                    Token comma = d.getToken();
+                    if (comma.type == TokenType::Comma) d.advance();
+                }
+            }
+            return type_node;
+        }
+        type_node->token = tok;
+        return type_node;
+    }
+
     // DotDot / DotDotDot for variadic params
     if (tok.type == TokenType::DotDotDot) {
         type_node->token = tok;

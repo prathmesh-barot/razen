@@ -1,8 +1,0 @@
-// 050: All primitive type declarations (using := for inference)
-pub func main() -> i32 {
-    c := 42
-    d := 42
-    e : bool = true
-    f : char = 'x'
-    ret c
-}

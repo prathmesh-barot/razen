@@ -64,7 +64,7 @@ void Codegen::generate(const std::vector<ASTNode*>& nodes) {
         }
     }
 
-    // Pass 1: collect type declarations (structs, enums, unions, errors)
+    // Pass 1: collect type declarations (structs, enums, unions, errors, behaviours)
     for (auto* node : nodes) {
         if (!node) continue;
         switch (node->node_type) {
@@ -72,7 +72,17 @@ void Codegen::generate(const std::vector<ASTNode*>& nodes) {
             case ASTNodeType::EnumDeclaration:    ir.genEnum(node);   break;
             case ASTNodeType::UnionDeclaration:   ir.genUnion(node);  break;
             case ASTNodeType::ErrorDeclaration:   ir.genError(node);  break;
+            case ASTNodeType::BehaveDeclaration:  ir.genBehave(node); break;
             default: break;
+        }
+    }
+
+    // Pass 1.5: generate vtable types and instances for trait implementations
+    for (auto* node : nodes) {
+        if (!node) continue;
+        if (node->node_type == ASTNodeType::StructDeclaration ||
+            node->node_type == ASTNodeType::UnionDeclaration) {
+            ir.genTraitVTable(node);
         }
     }
 
@@ -161,6 +171,16 @@ void IRGen::genStruct(ASTNode* node) {
     auto& name = node->token->value;
 
     if (types.structs.count(name)) return;
+
+    // Extract trait implementations from ~> (Identifier nodes before brace)
+    struct_traits[name].clear();
+    if (node->children) {
+        for (auto* child : *node->children) {
+            if (child->node_type == ASTNodeType::Identifier) {
+                if (child->token) struct_traits[name].insert(child->token->value);
+            }
+        }
+    }
 
     std::vector<Type*> field_types;
     std::vector<std::string> field_names;
@@ -268,7 +288,158 @@ void IRGen::genError(ASTNode* node) {
     }
 }
 
-// ── External function declaration ───────────────────────────────────────────
+// ── Behaviour declaration ──────────────────────────────────────────────────
+
+void IRGen::genBehave(ASTNode* node) {
+    if (!node || !node->token) return;
+    auto& name = node->token->value;
+    if (vtables.count(name)) return;
+
+    VTableInfo vi;
+    vi.trait_name = name;
+
+    if (node->children) {
+        // Collect method signatures from behaviour
+        for (auto* child : *node->children) {
+            if (child->node_type == ASTNodeType::FunctionDeclaration && child->token) {
+                VTableMethodInfo mi;
+                mi.name = child->token->value;
+                mi.idx = vi.methods.size();
+
+                // Build function type from parameter types
+                Type* ret = Type::getVoidTy(ctx);
+                if (child->left && child->left->node_type == ASTNodeType::ReturnType && child->left->left)
+                    ret = resolveType(child->left->left);
+
+                std::vector<Type*> param_types;
+                if (child->middle && child->middle->children) {
+                    for (auto* p : *child->middle->children) {
+                        if (p->node_type == ASTNodeType::Parameter) {
+                            param_types.push_back(p->left ? resolveType(p->left) : Type::getInt32Ty(ctx));
+                        }
+                    }
+                }
+                mi.fn_type = FunctionType::get(ret, param_types, false);
+                vi.methods.push_back(mi);
+            }
+        }
+    }
+
+    // Create vtable struct type for this behaviour
+    if (!vi.methods.empty()) {
+        std::vector<Type*> fn_ptr_types;
+        for (auto& m : vi.methods) {
+            fn_ptr_types.push_back(PointerType::getUnqual(m.fn_type));
+        }
+        vi.vtable_type = StructType::create(ctx, fn_ptr_types, name + ".vtable");
+    }
+
+    vtables[name] = vi;
+}
+
+// ── Trait vtable instance generation ──────────────────────────────────────
+
+void IRGen::genTraitVTable(ASTNode* node) {
+    if (!node || !node->token) return;
+    auto& struct_name = node->token->value;
+
+    struct_vtables[struct_name].clear();
+
+    // Find which traits this struct claims to implement
+    auto tit = struct_traits.find(struct_name);
+    if (tit == struct_traits.end()) return;
+
+    for (auto& trait_name : tit->second) {
+        auto vit = vtables.find(trait_name);
+        if (vit == vtables.end()) continue;
+
+        auto& vi = vit->second;
+        if (vi.methods.empty()) continue;
+
+        // For each method in the trait, find the matching method in the struct
+        std::vector<Constant*> fn_ptrs;
+        for (auto& mi : vi.methods) {
+            // Look for a method with matching name in struct_methods
+            auto smit = struct_methods.find(struct_name);
+            Constant* fn_ptr = Constant::getNullValue(PointerType::getUnqual(ctx));
+
+            if (smit != struct_methods.end()) {
+                for (auto* method : smit->second) {
+                    if (method->token && method->token->value == mi.name) {
+                        std::string mangled = struct_name + "." + mi.name;
+                        auto* fn = module.getFunction(mangled);
+                        if (fn) {
+                            fn_ptr = ConstantExpr::getBitCast(fn, PointerType::getUnqual(mi.fn_type));
+                        }
+                        break;
+                    }
+                }
+            }
+
+            fn_ptrs.push_back(fn_ptr);
+        }
+
+        // Create global vtable instance
+        auto* gv = new GlobalVariable(
+            module, vi.vtable_type, true, GlobalValue::InternalLinkage,
+            ConstantStruct::get(vi.vtable_type, fn_ptrs),
+            struct_name + "." + trait_name + ".vtable");
+        struct_vtables[struct_name][trait_name] = gv;
+    }
+}
+
+// ── Trait method call dispatch ────────────────────────────────────────────
+
+Value* IRGen::genTraitMethodCall(ASTNode* node, const std::string& struct_name,
+                                 const std::string& trait_name, const std::string& method_name,
+                                 Value* self_ptr, ASTNode* call_node) {
+    // Look up the vtable global
+    auto svit = struct_vtables.find(struct_name);
+    if (svit == struct_vtables.end()) return nullptr;
+    auto tvit = svit->second.find(trait_name);
+    if (tvit == svit->second.end()) return nullptr;
+
+    auto vit = vtables.find(trait_name);
+    if (vit == vtables.end()) return nullptr;
+
+    auto* gv = tvit->second;
+
+    // Find method index
+    unsigned idx = 0;
+    bool found = false;
+    for (auto& m : vit->second.methods) {
+        if (m.name == method_name) { found = true; break; }
+        idx++;
+    }
+    if (!found) return nullptr;
+
+    // Load function pointer from vtable
+    auto* zero = ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    auto* idx_val = ConstantInt::get(Type::getInt32Ty(ctx), idx);
+    auto* gep = builder.CreateGEP(gv->getValueType(), gv, {zero, idx_val}, "vtable.gep");
+    auto* fn_ptr = builder.CreateLoad(PointerType::getUnqual(ctx), gep, "vtable.fn");
+
+    // Collect args
+    std::vector<Value*> args;
+    // self pointer is already provided
+    if (self_ptr) args.push_back(self_ptr);
+
+    // Add method call args
+    if (call_node && call_node->children) {
+        for (auto* a : *call_node->children) {
+            if (a->left) {
+                auto* arg_val = genExpr(a->left);
+                if (arg_val) args.push_back(arg_val);
+            }
+        }
+    }
+
+    // Call through vtable
+    auto* ret = builder.CreateCall(vit->second.methods[idx].fn_type, fn_ptr, args, "trait.call");
+    if (ret->getType()->isVoidTy())
+        return Constant::getNullValue(Type::getInt32Ty(ctx));
+    return ret;
+}
 
 void IRGen::genExt(ASTNode* node) {
     if (!node || !node->token) return;
@@ -323,6 +494,7 @@ void IRGen::genFunc(ASTNode* node) {
 
     named_values.clear();
     named_types.clear();
+    unsigned_vars.clear();
     deferred.clear();
     has_return = false;
     current_func_name = name;
@@ -410,6 +582,14 @@ void IRGen::genVar(ASTNode* node, bool is_const) {
 
     Type* ty = node->left ? razenType(node->left) : nullptr;
 
+    // Track unsigned variables
+    if (node->left && node->left->token) {
+        auto& type_name = node->left->token->value;
+        if (isUnsignedRazenType(type_name)) {
+            unsigned_vars.insert(name);
+        }
+    }
+
     if (!current_llvm_function) {
         if (!ty) ty = Type::getInt32Ty(ctx);
         if (node->right && isConstantNode(node->right)) {
@@ -417,11 +597,14 @@ void IRGen::genVar(ASTNode* node, bool is_const) {
             if (!ty) ty = val->getType();
             new GlobalVariable(module, ty, is_const, GlobalValue::InternalLinkage,
                               dyn_cast<Constant>(val), name);
-        } else {
-            if (!ty) ty = Type::getInt32Ty(ctx);
+        } else if (node->right) {
             auto* gv = new GlobalVariable(module, ty, is_const, GlobalValue::InternalLinkage,
                                           Constant::getNullValue(ty), name);
-            if (node->right) pending_global_inits.push_back({gv, node->right});
+            pending_global_inits.push_back({gv, node->right});
+        } else {
+            if (!ty) ty = Type::getInt32Ty(ctx);
+            new GlobalVariable(module, ty, is_const, GlobalValue::InternalLinkage,
+                               Constant::getNullValue(ty), name);
         }
         return;
     }
@@ -472,10 +655,12 @@ void IRGen::genReturn(ASTNode* node) {
         if (val && current_ret_type) {
             if (val->getType() != current_ret_type) {
                 if (isIntTy(val->getType()) && isIntTy(current_ret_type)) {
-                    unsigned w1 = cast<IntegerType>(val->getType())->getBitWidth();
-                    unsigned w2 = cast<IntegerType>(current_ret_type)->getBitWidth();
-                    if (w1 < w2) val = builder.CreateSExt(val, current_ret_type);
-                    else if (w1 > w2) val = builder.CreateTrunc(val, current_ret_type);
+                    // Check if return value is unsigned
+                    bool is_unsigned = false;
+                    if (node->left->node_type == ASTNodeType::Identifier && node->left->token) {
+                        is_unsigned = unsigned_vars.count(node->left->token->value);
+                    }
+                    val = widenInt(val, current_ret_type, is_unsigned);
                 } else {
                     val = Constant::getNullValue(current_ret_type);
                 }
@@ -886,8 +1071,13 @@ Value* IRGen::genLiteral(ASTNode* node) {
             if (it != string_globals.end()) {
                 gv = it->second;
             } else {
-                gv = builder.CreateGlobalString(val, ".str");
-                string_globals[val] = gv;
+                // Create a properly named global string with dedup
+                auto* str_constant = ConstantDataArray::getString(ctx, val, true);
+                auto* global = new GlobalVariable(
+                    module, str_constant->getType(), true,
+                    GlobalValue::PrivateLinkage, str_constant, ".str." + std::to_string(string_globals.size()));
+                string_globals[val] = global;
+                gv = global;
             }
             auto* zero = ConstantInt::get(Type::getInt32Ty(ctx), 0);
             return builder.CreateGEP(gv->getValueType(), gv, {zero, zero}, "str.ptr");
@@ -927,20 +1117,79 @@ Value* IRGen::genIdentifier(ASTNode* node) {
 
 Value* IRGen::genBinary(ASTNode* node) {
     if (!node) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+
+    auto tok = node->token;
+    if (!tok) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+
+    // ── Short-circuit evaluation for && / || ─────────────────────────────────
+    if (tok->type == TokenType::AndAnd || tok->type == TokenType::OrOr) {
+        auto* fn = builder.GetInsertBlock()->getParent();
+
+        // Evaluate LHS and ensure it's i1
+        auto* lhs = genExpr(node->left);
+        if (!lhs) lhs = ConstantInt::getFalse(ctx);
+        if (lhs->getType() != Type::getInt1Ty(ctx))
+            lhs = builder.CreateICmpNE(lhs, ConstantInt::get(lhs->getType(), 0), "sc.lhs");
+
+        auto* lhsBlock = builder.GetInsertBlock();
+        auto* rhsBB = BasicBlock::Create(ctx, "sc.rhs", fn);
+        auto* endBB = BasicBlock::Create(ctx, "sc.end", fn);
+
+        if (tok->type == TokenType::AndAnd) {
+            // a && b: if a is false → false, else evaluate b
+            builder.CreateCondBr(lhs, rhsBB, endBB);
+        } else {
+            // a || b: if a is true → true, else evaluate b
+            builder.CreateCondBr(lhs, endBB, rhsBB);
+        }
+
+        // Evaluate RHS
+        builder.SetInsertPoint(rhsBB);
+        auto* rhs_val = genExpr(node->right);
+        if (!rhs_val) rhs_val = ConstantInt::getFalse(ctx);
+        if (rhs_val->getType() != Type::getInt1Ty(ctx))
+            rhs_val = builder.CreateICmpNE(rhs_val, ConstantInt::get(rhs_val->getType(), 0), "sc.rhs");
+        auto* rhsBlock = builder.GetInsertBlock();
+        builder.CreateBr(endBB);
+
+        // Build PHI
+        builder.SetInsertPoint(endBB);
+        auto* phi = builder.CreatePHI(Type::getInt1Ty(ctx), 2, "sc.result");
+        if (tok->type == TokenType::AndAnd) {
+            phi->addIncoming(ConstantInt::getFalse(ctx), lhsBlock);
+        } else {
+            phi->addIncoming(ConstantInt::getTrue(ctx), lhsBlock);
+        }
+        phi->addIncoming(rhs_val, rhsBlock);
+        return phi;
+    }
+
     auto* lhs = genExpr(node->left);
     auto* rhs = genExpr(node->right);
     if (!lhs || !rhs) return lhs ? lhs : rhs;
 
-    auto tok = node->token;
-    if (!tok) return lhs;
+    // Determine if operands are unsigned (check from identifier sources)
+    bool lhs_unsigned = false;
+    bool rhs_unsigned = false;
+    if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token) {
+        lhs_unsigned = unsigned_vars.count(node->left->token->value);
+    }
+    if (node->right && node->right->node_type == ASTNodeType::Identifier && node->right->token) {
+        rhs_unsigned = unsigned_vars.count(node->right->token->value);
+    }
 
     Type* ty = lhs->getType();
     if (rhs->getType() != ty) {
         if (isIntTy(ty) && isIntTy(rhs->getType())) {
             auto w1 = cast<IntegerType>(ty)->getBitWidth();
             auto w2 = cast<IntegerType>(rhs->getType())->getBitWidth();
-            if (w1 < w2) lhs = builder.CreateSExt(lhs, rhs->getType());
-            else if (w1 > w2) rhs = builder.CreateSExt(rhs, ty);
+            if (w1 < w2) {
+                // Widen left — use unsigned if left is unsigned
+                lhs = widenInt(lhs, rhs->getType(), lhs_unsigned);
+            } else if (w1 > w2) {
+                // Widen right — use unsigned if right is unsigned
+                rhs = widenInt(rhs, ty, rhs_unsigned);
+            }
             ty = lhs->getType();
         }
     }
@@ -965,18 +1214,18 @@ Value* IRGen::genBinary(ASTNode* node) {
         case TokenType::NotEquals:
             return fl ? builder.CreateFCmpUNE(lhs, rhs) : builder.CreateICmpNE(lhs, rhs);
         case TokenType::LessThan:
-            return fl ? builder.CreateFCmpOLT(lhs, rhs) : builder.CreateICmpSLT(lhs, rhs);
+            return fl ? builder.CreateFCmpOLT(lhs, rhs) : (lhs_unsigned || rhs_unsigned
+                ? builder.CreateICmpULT(lhs, rhs) : builder.CreateICmpSLT(lhs, rhs));
         case TokenType::LessThanEquals:
-            return fl ? builder.CreateFCmpOLE(lhs, rhs) : builder.CreateICmpSLE(lhs, rhs);
+            return fl ? builder.CreateFCmpOLE(lhs, rhs) : (lhs_unsigned || rhs_unsigned
+                ? builder.CreateICmpULE(lhs, rhs) : builder.CreateICmpSLE(lhs, rhs));
         case TokenType::GreaterThan:
-            return fl ? builder.CreateFCmpOGT(lhs, rhs) : builder.CreateICmpSGT(lhs, rhs);
+            return fl ? builder.CreateFCmpOGT(lhs, rhs) : (lhs_unsigned || rhs_unsigned
+                ? builder.CreateICmpUGT(lhs, rhs) : builder.CreateICmpSGT(lhs, rhs));
         case TokenType::GreaterThanEquals:
-            return fl ? builder.CreateFCmpOGE(lhs, rhs) : builder.CreateICmpSGE(lhs, rhs);
+            return fl ? builder.CreateFCmpOGE(lhs, rhs) : (lhs_unsigned || rhs_unsigned
+                ? builder.CreateICmpUGE(lhs, rhs) : builder.CreateICmpSGE(lhs, rhs));
 
-        case TokenType::AndAnd:
-            return builder.CreateAnd(lhs, rhs);
-        case TokenType::OrOr:
-            return builder.CreateOr(lhs, rhs);
         case TokenType::And:
             return builder.CreateAnd(lhs, rhs);
         case TokenType::Or:
@@ -986,7 +1235,7 @@ Value* IRGen::genBinary(ASTNode* node) {
         case TokenType::ShiftLeft:
             return builder.CreateShl(lhs, rhs);
         case TokenType::ShiftRight:
-            return builder.CreateAShr(lhs, rhs);
+            return builder.CreateLShr(lhs, rhs);  // Use LShr (safer default for both signed/unsigned)
 
         default:
             return lhs;
@@ -1020,13 +1269,7 @@ Value* IRGen::genUnary(ASTNode* node) {
         return Constant::getNullValue(PointerType::getUnqual(ctx));
     }
     if (op == ".*") {
-        Type* load_ty = Type::getInt32Ty(ctx);
-        if (auto* ai = dyn_cast<AllocaInst>(inner))
-            load_ty = ai->getAllocatedType();
-        else if (auto* li = dyn_cast<LoadInst>(inner))
-            load_ty = li->getType();
-        else if (auto* gep = dyn_cast<GetElementPtrInst>(inner))
-            load_ty = gep->getResultElementType();
+        Type* load_ty = getPointeeType(inner);
         return builder.CreateLoad(load_ty, inner, "deref");
     }
     return inner;
@@ -1061,11 +1304,15 @@ Value* IRGen::genCall(ASTNode* node) {
             auto* expected = fn->getArg(i)->getType();
             if (args[i]->getType() != expected) {
                 if (isIntTy(args[i]->getType()) && isIntTy(expected)) {
-                    auto w1 = cast<IntegerType>(args[i]->getType())->getBitWidth();
-                    auto w2 = cast<IntegerType>(expected)->getBitWidth();
-                    if (w1 < w2) call_args.push_back(builder.CreateSExt(args[i], expected));
-                    else if (w1 > w2) call_args.push_back(builder.CreateTrunc(args[i], expected));
-                    else call_args.push_back(args[i]);
+                    // Determine unsignedness from the argument expression
+                    bool is_unsigned = false;
+                    if (node->children && i < node->children->size()) {
+                        auto* arg_node = (*node->children)[i];
+                        if (arg_node->left && arg_node->left->node_type == ASTNodeType::Identifier && arg_node->left->token) {
+                            is_unsigned = unsigned_vars.count(arg_node->left->token->value);
+                        }
+                    }
+                    call_args.push_back(widenInt(args[i], expected, is_unsigned));
                 } else {
                     call_args.push_back(args[i]);
                 }

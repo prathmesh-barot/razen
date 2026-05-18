@@ -227,9 +227,9 @@
 - ✓ Self parameter handling for method calls
 
 ### Expression Code Generation
-- ✓ Literals: int (i32), float (double), bool (i1), char (i8), string (global `@.str.N` with dedup)
+- ✓ Literals: int (i32), float (double), bool (i1), char (i8), string (global `@.str.N` with dedup and PrivateLinkage)
 - ✓ Identifier: load from alloca with type tracking, enum/error lookup, `null` → null constant
-- ✓ Binary operators: arithmetic (Add/FAdd), comparison (ICmp/FCmp), logical (And/Or i1), bitwise (And/Or/Xor/Shl/AShr) — all with float/int dispatch and SExt/Trunc widening
+- ✓ Binary operators: arithmetic (Add/FAdd), comparison (ICmp/FCmp), logical (And/Or i1), bitwise (And/Or/Xor/Shl/LShr) — all with float/int dispatch and unsigned-aware SExt/ZExt/Trunc widening
 - ✓ Unary operators: negate (Neg/FNeg), not (Xor 1), bitnot (Xor all-ones), address-of (`&`), dereference (`.*` via LoadInst)
 - ✓ Function calls with argument type widening (SExt/Trunc)
 - ✓ Member access: struct field GEP, enum variant constant, error set constant, method call with mangled name
@@ -243,7 +243,7 @@
 - ✓ Variable declarations with initializer
 - ✓ Assignment: `=`, `+=`, `-=`, `*=`, `/=`, `%=` (all with float/int dispatch)
 - ✓ Assignment to struct field: `x.field = expr` via GEP chain
-- ✓ Return statement with value (including SExt/Trunc for integer width mismatch)
+- ✓ Return statement with value (including unsigned-aware SExt/ZExt/Trunc for integer width mismatch)
 - ✓ If/else with else-if chaining (CondBr based on i1 condition, end block joining)
 - ✓ Loops: infinite (`loop {}`), conditional (`loop cond {}`), with cond/body/end basic blocks
 - ✓ Break → `br` to `loop.end`, Skip → `br` to `loop.continue`
@@ -278,7 +278,7 @@
 - ✓ Error union return construction: `{i1 1, i32 code}` or `{i1 0, T value}`
 - ✓ Try expression: `extractvalue` flag check, branch to catch or propagate
 - ✓ Try block: scope with catch handler target
-- ☐ Behaviour / Trait code generation (vtable dispatch)
+- ◐ Behaviour / Trait code generation (vtable type creation + instance generation + dispatch implemented, end-to-end untested)
 - ☐ Generator / Async code generation
 
 ---
@@ -300,7 +300,7 @@
 ## Stage 6: Critical Missing Features
 
 ### Codegen Gaps
-- ☐ Short-circuit evaluation for `&&` / `||` (currently emits bitwise And/Or)
+- ✓ Short-circuit evaluation for `&&` / `||` (PHI-node based with correct basic block control flow)
 - ☐ Block-level break/continue labels (break/skip only target innermost loop)
 - ☐ Behaviour/trait vtable dispatch
 - ☐ Comptime / metaprogramming
@@ -336,7 +336,7 @@
 | M1 | Working lexer | Full tokenization of all Razen constructs | ✓ Complete |
 | M2 | Full parser + AST | All declarations, statements, expressions, generics, ranges, else-if, block try, ext struct | ✓ Complete |
 | M3 | Semantic analysis | Type checking, scope, validation, categorized errors, typeToString, pointer/error union compatibility | ✓ Complete |
-| M4 | LLVM codegen | All types, expressions, statements, control flow, optimization, emission | ◐ ≈85% — methods basic, no vtable dispatch |
+| M4 | LLVM codegen | All types, expressions, statements, control flow, optimization, emission | ◐ ≈90% — short-circuit ✓, traits ◐, comptime ☐ |
 | M5 | Struct codegen | Struct types, field access, methods | ✓ Types+fields ✓, methods ◐ |
 | M6 | Enum + Match + Union | Enumerations, tagged unions, match dispatch | ✓ Enum✓ Union✓ Match✓ |
 | M7 | Error handling | Error sets, error unions, try/catch | ◐ Error sets + try expr done, union propagation basic |
@@ -358,10 +358,10 @@
 
 ---
 
-**Progress:** Phases 1-3 (Lexer, Parser, Semantic Analysis) complete. Phase 4 (Codegen) ~85% complete — core infrastructure fully done, optimization pipeline (mem2reg + instcombine), object/assembly emission (`emitObject`/`emitAssembly`), CLI (`--help`, `--version`, `-v`, file args), all major control flow (if/loop/match/defer/try), compound types (struct/enum/union/error), all expression types. Remaining codegen work: struct method vtable dispatch, short-circuit evaluation, comptime evaluation, and match IR block ordering edge cases.
+**Progress:** Phases 1-3 (Lexer, Parser, Semantic Analysis) complete. Phase 4 (Codegen) ~90% complete — core infrastructure fully done, optimization pipeline (mem2reg + instcombine), object/assembly emission (`emitObject`/`emitAssembly`), CLI (`--help`, `--version`, `-v`, file args), all major control flow (if/loop/match/defer/try), compound types (struct/enum/union/error), all expression types. Short-circuit `&&`/`||` implemented with PHI-node based control flow. Unsigned-aware integer widening and comparisons. Trait vtable codegen implemented (type creation, instance generation, dispatch). Remaining codegen work: comptime evaluation, match IR block ordering edge cases, end-to-end trait dispatch verification.
 
 **Std Library:** ~5% — `fmt.rzn` (print/println/printf/puts) is functional and injected on `use std.fmt`.
 
-**All 10 built-in sample programs** produce valid `.o` and `.s` files in `output/`; compiled object files link and execute correctly.
+**All 6 test programs in `tests/`** produce valid `.o` and `.s` files in `output/`; compiled object files link and execute correctly.
 
-**Next Target:** Remaining codegen gaps (short-circuit `&&`/`||`, comptime evaluation, enum match CFG fix) + struct method codegen + begin std library modules (std.os, std.mem).
+**Next Target:** Fix factorial recursion optimization bug (returns 208 for fact(6)), complete comptime evaluation, enum match CFG fix, end-to-end trait dispatch verification, std library modules (std.os, std.mem).

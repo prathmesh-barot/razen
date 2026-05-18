@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -24,6 +25,10 @@ inline bool isIntTy(llvm::Type* ty) { return ty && ty->isIntegerTy(); }
 inline bool isFloatTy(llvm::Type* ty) {
     return ty && (ty->isHalfTy() || ty->isFloatTy() || ty->isDoubleTy() || ty->isFP128Ty());
 }
+inline bool isUnsignedRazenType(const std::string& name) {
+    return name == "u8" || name == "u16" || name == "u32" || name == "u64" ||
+           name == "u128" || name == "usize" || name == "uint";
+}
 
 // ── Named type registry ─────────────────────────────────────────────────────
 struct TypeRegistry {
@@ -42,6 +47,9 @@ struct IRGen {
     // ── Variable scope: name → alloca instruction ──
     std::unordered_map<std::string, llvm::AllocaInst*> named_values;
     std::unordered_map<std::string, llvm::Type*> named_types;
+
+    // ── Unsigned variable tracking ──
+    std::unordered_set<std::string> unsigned_vars;
 
     // ── Control-flow labels ──
     llvm::BasicBlock* loop_continue = nullptr;
@@ -89,6 +97,32 @@ struct IRGen {
     // ── String literal dedup ──
     std::unordered_map<std::string, llvm::GlobalVariable*> string_globals;
 
+    // ── Pointee type tracking for dereference ──
+    // Maps pointer SSA values -> their pointee type (opaque ptr workaround)
+    std::unordered_map<const llvm::Value*, llvm::Type*> pointee_types;
+    void setPointeeType(llvm::Value* ptr, llvm::Type* ty);
+    llvm::Type* getPointeeType(llvm::Value* ptr);
+
+    // ── Behaviour/trait vtable tracking ──
+    struct VTableMethodInfo {
+        std::string name;
+        llvm::FunctionType* fn_type;
+        unsigned idx;
+    };
+    struct VTableInfo {
+        std::string trait_name;
+        std::vector<VTableMethodInfo> methods;
+        llvm::StructType* vtable_type;
+    };
+    // trait_name -> vtable info
+    std::unordered_map<std::string, VTableInfo> vtables;
+    // struct_name -> {trait_name -> vtable global}
+    std::unordered_map<std::string, std::unordered_map<std::string, llvm::GlobalVariable*>> struct_vtables;
+
+    // Track which structs implement which traits
+    // struct_name -> set of trait names
+    std::unordered_map<std::string, std::unordered_set<std::string>> struct_traits;
+
     explicit IRGen(const std::string& source = "main.rz")
         : module(source, ctx), builder(ctx) {}
     IRGen(const IRGen&) = delete;
@@ -129,6 +163,13 @@ struct IRGen {
     llvm::Value* genTryExpr(ASTNode* node);
     llvm::Value* genUnionConstruct(ASTNode* node);
 
+    // ── Behaviour/trait codegen ──
+    void genBehave(ASTNode* node);
+    void genTraitVTable(ASTNode* node);
+    llvm::Value* genTraitMethodCall(ASTNode* node, const std::string& struct_name,
+                                     const std::string& trait_name, const std::string& method_name,
+                                     llvm::Value* self_ptr, ASTNode* call_node);
+
     void emitDeferred();
     void createEntryBlockAlloca(llvm::Function* fn, const std::string& name, llvm::Type* ty);
     llvm::Value* loadVariable(const std::string& name);
@@ -136,6 +177,7 @@ struct IRGen {
     llvm::Value* createGEP(llvm::Value* ptr, llvm::Type* ty, unsigned idx);
     llvm::Value* createStructGEP(llvm::Value* ptr, llvm::Type* ty, unsigned idx0, unsigned idx1);
     llvm::Value* evalConstantNode(ASTNode* node);
+    llvm::Value* widenInt(llvm::Value* val, llvm::Type* target, bool is_unsigned);
 
     std::string dumpIR() { return dumpModule(module); }
     static std::string dumpModule(llvm::Module& m);
