@@ -81,4 +81,18 @@ inline TypeInfo primitiveFromToken(TokenType tt, const std::string& name) {
     }
 }
 
+inline TypeInfo* cloneTypeInfo(const TypeInfo* src) {
+    if (!src) return nullptr;
+    auto* ti = new TypeInfo();
+    ti->category = src->category;
+    ti->name = src->name;
+    ti->is_mut = src->is_mut;
+    ti->array_size = src->array_size;
+    if (src->pointee_type) ti->pointee_type = cloneTypeInfo(src->pointee_type);
+    if (src->elem_type) ti->elem_type = cloneTypeInfo(src->elem_type);
+    if (src->error_type) ti->error_type = cloneTypeInfo(src->error_type);
+    if (src->ok_type) ti->ok_type = cloneTypeInfo(src->ok_type);
+    return ti;
+}
+
 } // namespace razen

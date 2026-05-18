@@ -158,7 +158,8 @@ static bool compileSource(const std::string& label, const std::string& source,
         "std", "fmt", "self", "true", "false", "null",
         "print", "println", "printf", "puts",
         "eprint", "eprintln", "exit", "assert", "panic",
-        "clock_ms", "clock_ns"
+        "clock_ms", "clock_ns",
+        "e", "err"
     };
     Analyzer analyzer(gs, gs, std::move(whitelist), std::move(st));
     analyzer.analyze(ast_nodes);

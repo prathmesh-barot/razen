@@ -4,6 +4,7 @@
 #include <vector>
 #include "../lexer/lexer.h"
 #include "type_info.h"
+#include "../ast/node.h"
 
 namespace razen {
 
@@ -23,6 +24,33 @@ struct Symbol {
     std::unordered_map<std::string, Symbol*>* fields = nullptr;
     bool is_async = false;
     bool is_const = false;
+    bool is_global = false;
+
+    // Generic parameters (e.g. @Generic(T) stores {"T"})
+    std::vector<std::string> generic_params;
+
+    // Field order for structs/enums/unions
+    std::vector<std::string> field_order;
+
+    // Methods (FunctionDeclaration nodes) for structs/enums/unions
+    std::vector<ASTNode*> methods;
+
+    // Behaviour needs fields
+    std::unordered_map<std::string, Symbol*> needs_fields;
+
+    // Enum backing type
+    TypeInfo* backing_type = nullptr;
+
+    // Constant initializer expression
+    ASTNode* const_init = nullptr;
+
+    // Union variant struct fields
+    bool variant_is_struct = false;
+
+    ~Symbol() {
+        delete fields;
+        for (auto& p : needs_fields) delete p.second;
+    }
 };
 
 struct Scope {
@@ -64,6 +92,7 @@ struct SymbolTable {
     Scope* global_scope;
     Scope* current_scope;
     size_t loop_depth = 0;
+    bool has_skip_in_loop = false;
 
     SymbolTable(Scope* gs, Scope* cs) : global_scope(gs), current_scope(cs) {}
 

@@ -1,5 +1,5 @@
 CXX := clang++-20
-CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -g -O0 \
+CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -g -O0 -D_GLIBCXX_DEBUG \
             $(shell llvm-config-20 --cxxflags | sed 's/-fno-exceptions//g; s/-funwind-tables//g')
 LDFLAGS := $(shell llvm-config-20 --ldflags) -lLLVM-20 $(shell llvm-config-20 --system-libs)
 SRCDIR := src

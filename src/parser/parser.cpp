@@ -1063,6 +1063,7 @@ static ASTNode* parseTryStatement(ASTData& d) {
                 d.advance();
 
                 // optional (err) or |err| capture
+                ASTNode* err_var_node = nullptr;
                 if (d.hasMore()) {
                     Token open = d.getToken();
                     if (open.type == TokenType::LeftParen || open.type == TokenType::Or) {
@@ -1070,6 +1071,9 @@ static ASTNode* parseTryStatement(ASTData& d) {
                         Token e_tok = d.getToken();
                         if (e_tok.type == TokenType::Identifier) {
                             d.advance();
+                            err_var_node = createDefaultAstNode();
+                            err_var_node->node_type = ASTNodeType::Identifier;
+                            err_var_node->token = e_tok;
                         }
                         Token close = d.getToken();
                         if (close.type == TokenType::RightParen || close.type == TokenType::Or) {
@@ -1081,6 +1085,7 @@ static ASTNode* parseTryStatement(ASTData& d) {
                 ASTNode* catch_node = createDefaultAstNode();
                 catch_node->node_type = ASTNodeType::CatchExpression;
                 catch_node->token = maybe_catch;
+                if (err_var_node) catch_node->middle = err_var_node;
 
                 if (d.hasMore()) {
                     Token pt = d.getToken();
@@ -1110,21 +1115,27 @@ static ASTNode* parseTryStatement(ASTData& d) {
             d.advance();
 
             // optional |e| capture
+            ASTNode* err_var_node = nullptr;
             if (d.hasMore()) {
                 Token pipe = d.getToken();
                 if (pipe.type == TokenType::Or) {
                     d.advance();
                     Token e_tok = d.getToken();
+                    if (e_tok.type == TokenType::Identifier) {
+                        err_var_node = createDefaultAstNode();
+                        err_var_node->node_type = ASTNodeType::Identifier;
+                        err_var_node->token = e_tok;
+                    }
                     d.advance();
                     Token pipe2 = d.getToken();
                     if (pipe2.type == TokenType::Or) d.advance();
-                    (void)e_tok;
                 }
             }
 
             ASTNode* catch_node = createDefaultAstNode();
             catch_node->node_type = ASTNodeType::CatchExpression;
             catch_node->token = maybe_catch;
+            if (err_var_node) catch_node->middle = err_var_node;
 
             if (d.hasMore()) {
                 Token peek_tok = d.getToken();
