@@ -1,0 +1,12 @@
+// 015: Simple struct with field access
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+pub func main() -> i32 {
+    p : Point
+    p.x = 10
+    p.y = 20
+    ret p.x + p.y
+}

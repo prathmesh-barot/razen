@@ -2,6 +2,7 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <cstdlib>
 #include "lexer/lexer.h"
 #include "lexer/errors.h"
 #include "ast/errors.h"
@@ -14,22 +15,32 @@
 #include "codegen/codegen.h"
 #include <llvm/Support/TargetSelect.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 using namespace razen;
 
 struct CLIOpts {
     bool verbose = false;
+    bool run_mode = false;
+    std::string output_path;
     std::vector<std::string> files;
+    std::vector<std::string> run_args;
 };
 
 static void printHelp(const char* prog) {
-    std::cout << "Usage: " << prog << " [flags] [files...]\n\n"
+    std::cout << "Usage: " << prog << " [flags] [files...]\n"
+              << "       " << prog << " run [flags] <file.rzn> [-- args...]\n\n"
               << "Flags:\n"
               << "  -h, --help       Print this help\n"
               << "  --version        Print version\n"
               << "  -v, --verbose    Full phase-by-phase debug output\n"
               << "  --debug          Alias for --verbose\n"
+              << "  -o <path>        Build executable at <path> (links with gcc)\n"
               << "  -f, --files      Treat remaining args as files\n"
+              << "\n"
+              << "Subcommands:\n"
+              << "  run <file.rzn>   Compile, link, and execute immediately\n"
               << "\n"
               << "With no files, compiles 10 built-in samples.\n"
               << "Otherwise compiles each .rzn file, emits output/<name>.o/.s\n";
@@ -55,6 +66,15 @@ static CLIOpts parseArgs(int argc, char** argv) {
             opts.verbose = true;
         } else if (arg == "-f" || arg == "--files") {
             in_files = true;
+        } else if (arg == "-o" && i + 1 < argc) {
+            opts.output_path = argv[++i];
+        } else if (arg == "run" && !in_files && opts.files.empty()) {
+            opts.run_mode = true;
+        } else if (opts.run_mode && arg == "--") {
+            // Everything after -- is run args
+            for (int j = i + 1; j < argc; j++)
+                opts.run_args.push_back(argv[j]);
+            break;
         } else if (!in_files && arg[0] == '-') {
             std::cerr << "Unknown flag: " << arg << "\n";
             std::exit(1);
@@ -186,6 +206,42 @@ static bool compileSource(const std::string& label, const std::string& source,
     return true;
 }
 
+// ── Link .o → executable via gcc ─────────────────────────────────────────
+static bool linkExecutable(const std::string& obj_path, const std::string& out_path) {
+    std::string cmd = "gcc -no-pie -o \"" + out_path + "\" \"" + obj_path + "\" 2>/dev/null";
+    int rc = std::system(cmd.c_str());
+    return rc == 0;
+}
+
+// ── Compile → link → run (for `razenc run file.rzn`) ────────────────────
+static int compileRun(const std::string& label, const std::string& source,
+                      bool verbose, const std::vector<std::string>& run_args) {
+    // Phases 1-5: same as compileSource
+    if (!compileSource(label, source, verbose))
+        return 1;
+
+    std::string obj = "output/" + label + ".o";
+    std::string bin = "/tmp/rzn_" + label;
+
+    if (!linkExecutable(obj, bin)) {
+        std::cerr << label << ": Link failed\n";
+        return 1;
+    }
+
+    // Build command: binary + run_args
+    std::string cmd = "\"" + bin + "\"";
+    for (auto& a : run_args)
+        cmd += " \"" + a + "\"";
+
+    if (verbose)
+        std::cout << "\nRunning: " << cmd << "\n\n";
+
+    int rc = std::system(cmd.c_str());
+    if (WIFEXITED(rc))
+        return WEXITSTATUS(rc);
+    return 1;
+}
+
 struct SampleInfo { const char* name; const char* code; };
 static const SampleInfo SAMPLES[] = {
     {"HELLO_RET",     sample6::HELLO_RET},
@@ -221,18 +277,43 @@ int main(int argc, char** argv) {
             if (!compileSource(s.name, s.code, opts.verbose))
                 failed++;
         }
-    } else {
-        for (auto& f : opts.files) {
-            std::string source = readFile(f);
-            if (source.empty()) { failed++; continue; }
-            std::string label = f;
-            size_t dot = label.rfind('.');
-            if (dot != std::string::npos) label = label.substr(0, dot);
-            size_t slash = label.rfind('/');
-            if (slash != std::string::npos) label = label.substr(slash + 1);
+        return failed ? 1 : 0;
+    }
 
-            if (!compileSource(label, source, opts.verbose))
+    // ── Compile all files ──────────────────────────────────────────────
+    mkdir("output", 0755);
+
+    for (auto& f : opts.files) {
+        std::string source = readFile(f);
+        if (source.empty()) { failed++; continue; }
+        std::string label = f;
+        size_t dot = label.rfind('.');
+        if (dot != std::string::npos) label = label.substr(0, dot);
+        size_t slash = label.rfind('/');
+        if (slash != std::string::npos) label = label.substr(slash + 1);
+
+        if (opts.run_mode) {
+            // Compile + link + run
+            int rc = compileRun(label, source, opts.verbose, opts.run_args);
+            if (rc != 0) failed++;
+            return rc; // exit with program's exit code
+        }
+
+        if (!compileSource(label, source, opts.verbose)) {
+            failed++;
+            continue;
+        }
+
+        // ── If -o was given, link to executable ────────────────────────
+        if (!opts.output_path.empty()) {
+            std::string obj = "output/" + label + ".o";
+            if (linkExecutable(obj, opts.output_path)) {
+                if (opts.verbose)
+                    std::cout << "\t\tLinked → " << opts.output_path << "\t\tDone\n";
+            } else {
+                std::cerr << label << ": Link failed (gcc not found?)\n";
                 failed++;
+            }
         }
     }
 

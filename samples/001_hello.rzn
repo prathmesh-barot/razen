@@ -1,0 +1,4 @@
+// 001: Simplest possible program
+pub func main() -> i32 {
+    ret 42
+}

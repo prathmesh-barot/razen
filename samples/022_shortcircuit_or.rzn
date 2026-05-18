@@ -1,0 +1,9 @@
+// 022: Short-circuit || (second operand not evaluated if first is true)
+pub func main() -> i32 {
+    mut x : i32 = 0
+    if true || true { x = 1 }
+    if true || false { x = 1 }
+    if false || true { x = 1 }
+    if false || false { x = 0 }
+    ret x
+}

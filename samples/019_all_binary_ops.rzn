@@ -1,0 +1,17 @@
+// 019: All binary integer operators
+pub func main() -> i32 {
+    a : i32 = 42
+    b : i32 = 10
+    mut r : i32 = 0
+    r = a + b
+    r = a - b
+    r = a * b
+    r = a / b
+    r = a % b
+    r = a & b
+    r = a | b
+    r = a ^ b
+    r = a << 2
+    r = a >> 2
+    ret r
+}

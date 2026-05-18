@@ -1,0 +1,11 @@
+// 035: try expression (basic propagation not fully supported in semantic)
+func maybe_fail(fail: bool) -> i32 {
+    if fail {
+        ret -1
+    }
+    ret 42
+}
+
+pub func main() -> i32 {
+    ret maybe_fail(false)
+}

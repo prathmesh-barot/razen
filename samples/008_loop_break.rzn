@@ -1,0 +1,13 @@
+// 008: Infinite loop with break
+pub func main() -> i32 {
+    mut sum : i32 = 0
+    mut i : i32 = 0
+    loop {
+        if i > 5 {
+            break
+        }
+        sum = sum + i
+        i = i + 1
+    }
+    ret sum
+}

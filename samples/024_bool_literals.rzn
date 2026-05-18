@@ -1,0 +1,10 @@
+// 024: Bool literals and logical operations
+pub func main() -> i32 {
+    t := true
+    f := false
+    mut r : i32 = 0
+    if t { r = r + 1 }
+    if !f { r = r + 1 }
+    if t && !f { r = r + 1 }
+    ret r
+}

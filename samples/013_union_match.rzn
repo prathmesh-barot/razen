@@ -1,0 +1,20 @@
+// 013: Tagged union with match destructuring
+union Value {
+    Int(i32),
+    Float(f64),
+}
+
+func load(v: Value) -> i32 {
+    mut r : i32 = 0
+    match v {
+        Value.Int(x) => r = x,
+        Value.Float(y) => r = 0,
+        else => r = -1,
+    }
+    ret r
+}
+
+pub func main() -> i32 {
+    v := Value.Int(42)
+    ret load(v)
+}

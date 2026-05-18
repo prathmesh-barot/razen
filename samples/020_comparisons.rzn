@@ -1,0 +1,13 @@
+// 020: All comparison operators
+pub func main() -> i32 {
+    a : i32 = 10
+    b : i32 = 20
+    mut ok : i32 = 1
+    if a == b { ok = 0 }
+    if a != b { ok = ok }
+    if a < b { ok = ok }
+    if a > b { ok = 0 }
+    if a <= b { ok = ok }
+    if a >= b { ok = 0 }
+    ret ok
+}

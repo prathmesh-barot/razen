@@ -1,0 +1,5 @@
+// 043: Tuple literal .{a, b, c}
+pub func main() -> i32 {
+    t := .{1, "hello", true}
+    ret 0
+}

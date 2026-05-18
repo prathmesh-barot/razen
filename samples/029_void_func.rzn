@@ -1,0 +1,9 @@
+// 029: Void function with no return value
+func greet() {
+    x : i32 = 1
+}
+
+pub func main() -> i32 {
+    greet()
+    ret 0
+}

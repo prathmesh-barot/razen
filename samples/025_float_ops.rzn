@@ -1,0 +1,13 @@
+// 025: Float arithmetic
+ext func puts(s: str) -> i32
+
+pub func main() -> i32 {
+    a : f64 = 3.5
+    b : f64 = 2.0
+    c := a + b
+    d := c * a
+    e := d - b
+    f := e / a
+    puts("float ops done")
+    ret 0
+}

@@ -1,0 +1,11 @@
+// 005: If/else with comparison
+func max(a: i32, b: i32) -> i32 {
+    if a > b {
+        ret a
+    }
+    ret b
+}
+
+pub func main() -> i32 {
+    ret max(7, 3)
+}

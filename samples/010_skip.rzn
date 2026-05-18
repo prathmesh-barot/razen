@@ -1,0 +1,13 @@
+// 010: skip statement (continue)
+pub func main() -> i32 {
+    mut sum : i32 = 0
+    mut i : i32 = 0
+    loop i < 10 {
+        i = i + 1
+        if i % 2 == 0 {
+            skip
+        }
+        sum = sum + i
+    }
+    ret sum
+}

@@ -1,0 +1,6 @@
+// 044: Range expressions a..b and a..=b
+pub func main() -> i32 {
+    r1 := 0..10
+    r2 := 0..=5
+    ret 0
+}

@@ -1,0 +1,6 @@
+// 038: Address-of and pointer
+pub func main() -> i32 {
+    x : i32 = 42
+    p := &x
+    ret 0
+}

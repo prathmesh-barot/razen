@@ -1,0 +1,11 @@
+// 003: Recursive factorial (small input to avoid large return value)
+func fact(n: i32) -> i32 {
+    if n <= 1 {
+        ret 1
+    }
+    ret n * fact(n - 1)
+}
+
+pub func main() -> i32 {
+    ret fact(3)
+}

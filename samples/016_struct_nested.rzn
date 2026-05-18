@@ -1,0 +1,19 @@
+// 016: Nested structs with field access
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Rect {
+    min: Point,
+    max: Point,
+}
+
+pub func main() -> i32 {
+    r : Rect
+    r.min.x = 0
+    r.min.y = 0
+    r.max.x = 100
+    r.max.y = 200
+    ret r.max.x - r.min.x
+}

@@ -1,0 +1,9 @@
+// 031: Type inference with :=
+ext func puts(s: str) -> i32
+
+pub func main() -> i32 {
+    a := 42
+    b := a + 8
+    puts("type inference ok")
+    ret b
+}
