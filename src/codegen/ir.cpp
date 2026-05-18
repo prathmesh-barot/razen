@@ -87,12 +87,14 @@ Type* IRGen::razenType(ASTNode* node) {
         return PointerType::getUnqual(ctx);
     }
 
-    // Named struct/union
+    // Named struct/union/enum
     if (tt == TokenType::Identifier) {
         auto sit = types.structs.find(name);
         if (sit != types.structs.end()) return sit->second;
         auto ait = types.aliases.find(name);
         if (ait != types.aliases.end()) return ait->second;
+        auto eit = enums.find(name);
+        if (eit != enums.end()) return eit->second.backing;
         return Type::getInt32Ty(ctx);
     }
 
@@ -242,6 +244,13 @@ Value* IRGen::widenInt(Value* val, Type* target, bool is_unsigned) {
     }
     if (w1 > w2) return builder.CreateTrunc(val, target);
     return val;
+}
+
+Value* IRGen::widenIntToFloat(Value* val, Type* target) {
+    if (!val || !target) return val;
+    if (!isIntTy(val->getType())) return val;
+    if (!target->isDoubleTy() && !target->isFloatTy()) return val;
+    return builder.CreateSIToFP(val, target);
 }
 
 // ── Module dumping ──────────────────────────────────────────────────────────

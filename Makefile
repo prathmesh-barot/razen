@@ -1,5 +1,5 @@
 CXX := clang++-20
-CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -g -O0 -D_GLIBCXX_DEBUG \
+CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -g -O0 \
             $(shell llvm-config-20 --cxxflags | sed 's/-fno-exceptions//g; s/-funwind-tables//g')
 LDFLAGS := $(shell llvm-config-20 --ldflags) -lLLVM-20 $(shell llvm-config-20 --system-libs)
 SRCDIR := src
@@ -18,9 +18,13 @@ SRCS := $(SRCDIR)/main.cpp \
 
 OBJS := $(SRCS:$(SRCDIR)/%.cpp=$(BUILDDIR)/%.o)
 
-.PHONY: all clean run
+# Runtime library (linked into generated executables)
+FMT_SRC := src/std/fmt.cpp
+FMT_OBJ := build/std/fmt.o
 
-all: $(TARGET)
+.PHONY: all clean run fmt-lib
+
+all: $(TARGET) fmt-lib
 
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
@@ -28,6 +32,13 @@ $(TARGET): $(OBJS)
 $(BUILDDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -I$(SRCDIR) -c -o $@ $<
+
+# Standalone compile for the runtime library (no LLVM deps)
+fmt-lib: $(FMT_OBJ)
+
+$(FMT_OBJ): $(FMT_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) -std=c++20 -c -o $@ $<
 
 clean:
 	rm -rf $(BUILDDIR) $(TARGET)

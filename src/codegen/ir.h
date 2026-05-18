@@ -48,8 +48,9 @@ struct IRGen {
     std::unordered_map<std::string, llvm::AllocaInst*> named_values;
     std::unordered_map<std::string, llvm::Type*> named_types;
 
-    // ── Unsigned variable tracking ──
+    // ── Unsigned / char variable tracking ──
     std::unordered_set<std::string> unsigned_vars;
+    std::unordered_set<std::string> char_vars;
 
     // ── Control-flow labels ──
     llvm::BasicBlock* loop_continue = nullptr;
@@ -157,11 +158,13 @@ struct IRGen {
     llvm::Value* genUnary(ASTNode* node);
     llvm::Value* genCall(ASTNode* node);
     llvm::Value* genMemberAccess(ASTNode* node);
+    llvm::Value* genFormatCall(ASTNode* node, bool add_newline);
     llvm::Value* genArrayLiteral(ASTNode* node);
     llvm::Value* genTupleLiteral(ASTNode* node);
     llvm::Value* genRangeLiteral(ASTNode* node);
     llvm::Value* genTryExpr(ASTNode* node);
     llvm::Value* genUnionConstruct(ASTNode* node);
+    llvm::Value* genStructLiteral(ASTNode* node);
 
     // ── Behaviour/trait codegen ──
     void genBehave(ASTNode* node);
@@ -178,6 +181,7 @@ struct IRGen {
     llvm::Value* createStructGEP(llvm::Value* ptr, llvm::Type* ty, unsigned idx0, unsigned idx1);
     llvm::Value* evalConstantNode(ASTNode* node);
     llvm::Value* widenInt(llvm::Value* val, llvm::Type* target, bool is_unsigned);
+    llvm::Value* widenIntToFloat(llvm::Value* val, llvm::Type* target);
 
     std::string dumpIR() { return dumpModule(module); }
     static std::string dumpModule(llvm::Module& m);

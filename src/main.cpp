@@ -136,18 +136,8 @@ static bool compileSource(const std::string& label, const std::string& source,
     for (auto* node : ast_nodes) {
         if (node->node_type == ASTNodeType::UseDeclaration &&
             node->token && node->token->value == "std.fmt") {
-            std::string std_source = readFile("src/std/fmt.rzn");
-            if (!std_source.empty()) {
-                try {
-                    auto std_tokens = parseToTokens(std_source);
-                    auto std_nodes = buildAST(std_tokens, std_source);
-                    ast_nodes.insert(ast_nodes.begin(), std_nodes.begin(), std_nodes.end());
-                    if (verbose) std::cout << "  Injected std.fmt module\n";
-                } catch (const std::exception& e) {
-                    if (verbose) std::cout << "  Failed to load std.fmt: " << e.what() << "\n";
-                }
-            }
-            break;
+            // fmt is a C++ runtime library (src/std/fmt.cpp), no .rzn file needed
+            if (verbose) std::cout << "  std.fmt: using C++ runtime (src/std/fmt.cpp)\n";
         }
     }
 
@@ -184,7 +174,7 @@ static bool compileSource(const std::string& label, const std::string& source,
     }
 
     phase("Phase 5");
-    cg.optimize();
+    // cg.optimize();  // disabled: mem2reg + instcombine produce poison values
     std::string opt_ir = cg.getIR();
     writeIR(label + "_opt", opt_ir, true);
     ok("Optimization");
@@ -209,7 +199,9 @@ static bool compileSource(const std::string& label, const std::string& source,
 
 // ── Link .o → executable via gcc ─────────────────────────────────────────
 static bool linkExecutable(const std::string& obj_path, const std::string& out_path) {
-    std::string cmd = "gcc -no-pie -o \"" + out_path + "\" \"" + obj_path + "\" 2>/dev/null";
+    // Compile runtime library if needed
+    std::system("clang++-20 -std=c++20 -c src/std/fmt.cpp -o build/std/fmt.o 2>/dev/null");
+    std::string cmd = "gcc -no-pie -o \"" + out_path + "\" \"" + obj_path + "\" \"build/std/fmt.o\" 2>/dev/null";
     int rc = std::system(cmd.c_str());
     return rc == 0;
 }

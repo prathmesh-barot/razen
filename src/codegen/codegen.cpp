@@ -36,6 +36,11 @@ void Codegen::generate(const std::vector<ASTNode*>& nodes) {
     auto* int32 = Type::getInt32Ty(ctx);
     auto* i8ptr = PointerType::getUnqual(ctx);
     auto* voidTy = Type::getVoidTy(ctx);
+    auto* int1 = Type::getInt1Ty(ctx);
+    auto* int8 = Type::getInt8Ty(ctx);
+    auto* int64 = Type::getInt64Ty(ctx);
+    auto* floatTy = Type::getFloatTy(ctx);
+    auto* doubleTy = Type::getDoubleTy(ctx);
 
     {
         auto callee = mod.getOrInsertFunction("printf", FunctionType::get(int32, {i8ptr}, true));
@@ -63,6 +68,21 @@ void Codegen::generate(const std::vector<ASTNode*>& nodes) {
             f->setDoesNotThrow();
         }
     }
+    // Razen runtime library (fmt.cpp)
+    {
+        mod.getOrInsertFunction("__razen_print_str", FunctionType::get(voidTy, {i8ptr}, false));
+        mod.getOrInsertFunction("__razen_print_str_newline", FunctionType::get(voidTy, {i8ptr}, false));
+        mod.getOrInsertFunction("__razen_print_char", FunctionType::get(voidTy, {int8}, false));
+        mod.getOrInsertFunction("__razen_print_bool", FunctionType::get(voidTy, {int1}, false));
+        mod.getOrInsertFunction("__razen_print_int", FunctionType::get(voidTy, {int32}, false));
+        mod.getOrInsertFunction("__razen_print_uint", FunctionType::get(voidTy, {int32}, false));
+        mod.getOrInsertFunction("__razen_print_int64", FunctionType::get(voidTy, {int64}, false));
+        mod.getOrInsertFunction("__razen_print_uint64", FunctionType::get(voidTy, {int64}, false));
+        mod.getOrInsertFunction("__razen_print_float", FunctionType::get(voidTy, {floatTy}, false));
+        mod.getOrInsertFunction("__razen_print_double", FunctionType::get(voidTy, {doubleTy}, false));
+        mod.getOrInsertFunction("__razen_print_ptr", FunctionType::get(voidTy, {i8ptr}, false));
+        mod.getOrInsertFunction("__razen_print_newline", FunctionType::get(voidTy, false));
+    }
 
     // Pass 1: collect type declarations (structs, enums, unions, errors, behaviours)
     for (auto* node : nodes) {
@@ -86,6 +106,16 @@ void Codegen::generate(const std::vector<ASTNode*>& nodes) {
         }
     }
 
+    // Pass 1.75: emit struct method bodies with mangled names
+    // Must run before general codegen so calls from main() find them.
+    for (auto& [sname, methods] : ir.struct_methods) {
+        ir.current_struct = sname;
+        for (auto* meth : methods) {
+            if (meth) ir.genFunc(meth);
+        }
+    }
+    ir.current_struct.clear();
+
     // Pass 2: emit function declarations (ext func) for forward references
     for (auto* node : nodes) {
         if (node && node->node_type == ASTNodeType::ExtDeclaration) {
@@ -93,7 +123,7 @@ void Codegen::generate(const std::vector<ASTNode*>& nodes) {
         }
     }
 
-    // Pass 3: emit function definitions and globals
+    // Pass 3: emit function definitions, globals, and type aliases
     for (auto* node : nodes) {
         if (!node) continue;
         switch (node->node_type) {
@@ -107,6 +137,10 @@ void Codegen::generate(const std::vector<ASTNode*>& nodes) {
                 } catch (...) {
                     errs() << "Warning: failed to codegen variable " << (node->token ? node->token->value : "?") << "\n";
                 }
+                break;
+            case ASTNodeType::TypeAliasDeclaration:
+                if (node->token && node->left)
+                    ir.types.aliases[node->token->value] = ir.razenType(node->left);
                 break;
             default: break;
         }
@@ -151,6 +185,8 @@ void IRGen::genTopLevel(ASTNode* node) {
         case ASTNodeType::UseDeclaration:
         case ASTNodeType::BehaveDeclaration:
         case ASTNodeType::TypeAliasDeclaration:
+            if (node->token && node->left)
+                types.aliases[node->token->value] = razenType(node->left);
             return;
         case ASTNodeType::FunctionDeclaration:   genFunc(node); break;
         case ASTNodeType::ExtDeclaration:        genExt(node);  break;
@@ -490,11 +526,13 @@ void IRGen::genFunc(ASTNode* node) {
     }
 
     auto* ft = FunctionType::get(ret, params, false);
-    auto* fn = Function::Create(ft, Function::ExternalLinkage, name, module);
+    std::string func_name = current_struct.empty() ? name : (current_struct + "." + name);
+    auto* fn = Function::Create(ft, Function::ExternalLinkage, func_name, module);
 
     named_values.clear();
     named_types.clear();
     unsigned_vars.clear();
+    char_vars.clear();
     deferred.clear();
     has_return = false;
     current_func_name = name;
@@ -551,6 +589,7 @@ static bool isConstantNode(ASTNode* node) {
         case ASTNodeType::FloatLiteral:
         case ASTNodeType::BoolLiteral:
         case ASTNodeType::CharLiteral:
+        case ASTNodeType::StringLiteral:
             return true;
         default:
             return false;
@@ -569,6 +608,20 @@ Value* IRGen::evalConstantNode(ASTNode* node) {
             return val == "true" ? ConstantInt::getTrue(ctx) : ConstantInt::getFalse(ctx);
         case ASTNodeType::CharLiteral:
             return ConstantInt::get(Type::getInt8Ty(ctx), val.empty() ? 0 : (unsigned char)val[0]);
+        case ASTNodeType::StringLiteral: {
+            auto it = string_globals.find(val);
+            GlobalVariable* gv;
+            if (it != string_globals.end()) {
+                gv = it->second;
+            } else {
+                auto* arr = ConstantDataArray::getString(ctx, val, true);
+                gv = new GlobalVariable(module, arr->getType(), true,
+                    GlobalValue::PrivateLinkage, arr, ".str");
+                string_globals[val] = gv;
+            }
+            auto* zero = ConstantInt::get(Type::getInt32Ty(ctx), 0);
+            return ConstantExpr::getGetElementPtr(gv->getValueType(), gv, ArrayRef<Constant*>({zero, zero}));
+        }
         default:
             return ConstantInt::get(Type::getInt32Ty(ctx), 0);
     }
@@ -582,11 +635,14 @@ void IRGen::genVar(ASTNode* node, bool is_const) {
 
     Type* ty = node->left ? razenType(node->left) : nullptr;
 
-    // Track unsigned variables
+    // Track unsigned / char variables
     if (node->left && node->left->token) {
         auto& type_name = node->left->token->value;
         if (isUnsignedRazenType(type_name)) {
             unsigned_vars.insert(name);
+        }
+        if (type_name == "char") {
+            char_vars.insert(name);
         }
     }
 
@@ -594,6 +650,14 @@ void IRGen::genVar(ASTNode* node, bool is_const) {
         if (!ty) ty = Type::getInt32Ty(ctx);
         if (node->right && isConstantNode(node->right)) {
             auto* val = evalConstantNode(node->right);
+            if (ty && val->getType() != ty && isIntTy(val->getType()) && isIntTy(ty)) {
+                auto* ci = dyn_cast<ConstantInt>(val);
+                if (ci) {
+                    bool us = node->left && node->left->token && isUnsignedRazenType(node->left->token->value);
+                    val = ConstantInt::get(ty, us ? ci->getValue().zext(ty->getIntegerBitWidth())
+                                                  : ci->getValue().sext(ty->getIntegerBitWidth()));
+                }
+            }
             if (!ty) ty = val->getType();
             new GlobalVariable(module, ty, is_const, GlobalValue::InternalLinkage,
                               dyn_cast<Constant>(val), name);
@@ -653,6 +717,44 @@ void IRGen::genReturn(ASTNode* node) {
     if (node->left) {
         auto* val = genExpr(node->left);
         if (val && current_ret_type) {
+            // Check if return type is an error union / optional  { i1, T }
+            if (current_ret_type->isStructTy()) {
+                auto* st = cast<StructType>(current_ret_type);
+                if (st->getNumElements() == 2 && st->getElementType(0)->isIntegerTy(1)) {
+                    Type* inner_ty = st->getElementType(1);
+
+                    // Check if return expression is an error code (MemberAccess like MathError.DivisionByZero)
+                    bool is_error_code = false;
+                    if (node->left->node_type == ASTNodeType::MemberAccess &&
+                        node->left->left && node->left->right &&
+                        node->left->left->token && node->left->right->token) {
+                        auto erit = errors.find(node->left->left->token->value);
+                        if (erit != errors.end()) {
+                            is_error_code = erit->second.count(node->left->right->token->value) > 0;
+                        }
+                    }
+
+                    if (is_error_code || val->getType() != inner_ty) {
+                        // Error return: { true, zeroinit }
+                        Constant* err_elems[] = {
+                            ConstantInt::getTrue(ctx),
+                            Constant::getNullValue(inner_ty)
+                        };
+                        auto* ret = ConstantStruct::get(st, err_elems);
+                        builder.CreateRet(ret);
+                    } else {
+                        // Success return: { false, val }
+                        Constant* ok_elems[] = {
+                            ConstantInt::getFalse(ctx),
+                            dyn_cast<Constant>(val) ? dyn_cast<Constant>(val) : Constant::getNullValue(inner_ty)
+                        };
+                        auto* ret = ConstantStruct::get(st, ok_elems);
+                        builder.CreateRet(ret);
+                    }
+                    return;
+                }
+            }
+
             if (val->getType() != current_ret_type) {
                 if (isIntTy(val->getType()) && isIntTy(current_ret_type)) {
                     // Check if return value is unsigned
@@ -661,6 +763,9 @@ void IRGen::genReturn(ASTNode* node) {
                         is_unsigned = unsigned_vars.count(node->left->token->value);
                     }
                     val = widenInt(val, current_ret_type, is_unsigned);
+                } if (current_ret_type->isVoidTy()) {
+                    builder.CreateRetVoid();
+                    return;
                 } else {
                     val = Constant::getNullValue(current_ret_type);
                 }
@@ -719,6 +824,91 @@ void IRGen::genIf(ASTNode* node) {
 
 void IRGen::genLoop(ASTNode* node) {
     auto* fn = builder.GetInsertBlock()->getParent();
+
+    // ── For-each loop: loop <expr> |<var>| { body } ────────────────────────
+    if (node->middle && node->left) {
+        auto* iterable = genExpr(node->left);
+        if (!iterable) return;
+        Type* iter_ty = iterable->getType();
+
+        std::string var_name;
+        if (node->middle->node_type == ASTNodeType::Identifier && node->middle->token)
+            var_name = node->middle->token->value;
+
+        if (iter_ty->isArrayTy()) {
+            auto* arr_ty = cast<ArrayType>(iter_ty);
+            Type* elem_ty = arr_ty->getElementType();
+            unsigned len = arr_ty->getNumElements();
+
+            auto* arr_alloca = builder.CreateAlloca(iter_ty);
+            builder.CreateStore(iterable, arr_alloca);
+
+            auto* idx_alloca = builder.CreateAlloca(Type::getInt32Ty(ctx), nullptr, "foreach.idx");
+            builder.CreateStore(ConstantInt::get(Type::getInt32Ty(ctx), 0), idx_alloca);
+
+            if (!var_name.empty()) {
+                auto* elem_alloca = builder.CreateAlloca(elem_ty, nullptr, var_name);
+                named_values[var_name] = elem_alloca;
+                named_types[var_name] = elem_ty;
+            }
+
+            auto* condBB = BasicBlock::Create(ctx, "foreach.cond", fn);
+            auto* bodyBB = BasicBlock::Create(ctx, "foreach.body", fn);
+            auto* incBB  = BasicBlock::Create(ctx, "foreach.inc", fn);
+            auto* endBB  = BasicBlock::Create(ctx, "foreach.end", fn);
+
+            auto* prev_cont = loop_continue;
+            auto* prev_end  = loop_end;
+            loop_continue = incBB;
+            loop_end = endBB;
+
+            builder.CreateBr(condBB);
+            builder.SetInsertPoint(condBB);
+
+            auto* idx = builder.CreateLoad(Type::getInt32Ty(ctx), idx_alloca, "idx");
+            auto* cmp = builder.CreateICmpULT(idx, ConstantInt::get(Type::getInt32Ty(ctx), len), "idx.cmp");
+            builder.CreateCondBr(cmp, bodyBB, endBB);
+
+            builder.SetInsertPoint(bodyBB);
+            if (!var_name.empty()) {
+                auto* gep = builder.CreateGEP(iter_ty, arr_alloca, {
+                    ConstantInt::get(Type::getInt32Ty(ctx), 0),
+                    builder.CreateLoad(Type::getInt32Ty(ctx), idx_alloca, "idx2")
+                });
+                auto* elem_val = builder.CreateLoad(elem_ty, gep, "elem");
+                builder.CreateStore(elem_val, named_values[var_name]);
+            }
+
+            bool body_ret = false;
+            if (node->right) {
+                bool prev = has_return; has_return = false;
+                genNode(node->right);
+                body_ret = has_return;
+                has_return = prev;
+            }
+            if (!body_ret && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(incBB);
+
+            builder.SetInsertPoint(incBB);
+            auto* next_idx = builder.CreateAdd(
+                builder.CreateLoad(Type::getInt32Ty(ctx), idx_alloca, "idx3"),
+                ConstantInt::get(Type::getInt32Ty(ctx), 1), "next");
+            builder.CreateStore(next_idx, idx_alloca);
+            builder.CreateBr(condBB);
+
+            builder.SetInsertPoint(endBB);
+            loop_continue = prev_cont;
+            loop_end = prev_end;
+            if (!var_name.empty()) {
+                named_values.erase(var_name);
+                named_types.erase(var_name);
+            }
+            return;
+        }
+
+        // Non-array iterable not yet supported — fall through to while-loop
+    }
+
+    // ── While loop: loop <cond> { body } ───────────────────────────────────
     auto* condBB = BasicBlock::Create(ctx, "loop.cond", fn);
     auto* bodyBB = BasicBlock::Create(ctx, "loop.body", fn);
     auto* endBB  = BasicBlock::Create(ctx, "loop.end", fn);
@@ -744,8 +934,14 @@ void IRGen::genLoop(ASTNode* node) {
     }
 
     builder.SetInsertPoint(bodyBB);
-    if (node->right) genNode(node->right);
-    if (!has_return && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(loop_continue);
+    bool body_ret = false;
+    if (node->right) {
+        bool prev = has_return; has_return = false;
+        genNode(node->right);
+        body_ret = has_return;
+        has_return = prev;
+    }
+    if (!body_ret && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(loop_continue);
 
     builder.SetInsertPoint(endBB);
     loop_continue = prev_cont;
@@ -808,6 +1004,17 @@ void IRGen::genAssign(ASTNode* node) {
         return;
     }
 
+    // Pointer deref assignment: a.* = rhs
+    if (lhs->node_type == ASTNodeType::UnaryExpression &&
+        lhs->token && lhs->token->value == ".*") {
+        auto* ptr = genExpr(lhs->left);
+        if (ptr) {
+            Type* pointee_ty = getPointeeType(ptr);
+            doStore(ptr, pointee_ty);
+        }
+        return;
+    }
+
     if (lhs->node_type == ASTNodeType::MemberAccess) {
         if (lhs->left && lhs->left->node_type == ASTNodeType::Identifier && lhs->left->token) {
             auto& var = lhs->left->token->value;
@@ -822,6 +1029,11 @@ void IRGen::genAssign(ASTNode* node) {
                         sname = sn;
                         break;
                     }
+                }
+                if (sname.empty() && st_ty->isStructTy()) {
+                    auto* sty = cast<StructType>(st_ty);
+                    if (sty->hasName() && types.structs.count(sty->getName().str()))
+                        sname = sty->getName().str();
                 }
 
                 std::string fname;
@@ -842,11 +1054,7 @@ void IRGen::genAssign(ASTNode* node) {
                 Value* ptr = it->second;
                 Type* base_ty = st;
                 if (st_ty->isPointerTy()) {
-                    // Load the pointer value and create alloca for it
-                    auto* loaded_ptr = builder.CreateLoad(st_ty, ptr);
-                    auto* tmp = builder.CreateAlloca(st);
-                    builder.CreateStore(loaded_ptr, tmp);
-                    ptr = tmp;
+                    ptr = builder.CreateLoad(st_ty, ptr);
                     base_ty = st;
                 }
 
@@ -893,12 +1101,15 @@ void IRGen::genMatch(ASTNode* node) {
         auto* tag_ptr = builder.CreateStructGEP(match_ty, ptr, 0, "tag.ptr");
         auto* tag = builder.CreateLoad(Type::getInt32Ty(ctx), tag_ptr, "tag");
 
+        // Default block for unmatched tags (exhaustive match should never reach it)
+        auto* defaultBB = BasicBlock::Create(ctx, "match.default", fn);
+
         BasicBlock* currentBB = nullptr;
         for (size_t i = 0; i < cases.size(); i++) {
             auto* caseBB = BasicBlock::Create(ctx, "match.case", fn);
             auto* nextBB = (i == cases.size() - 1 && else_case)
                 ? BasicBlock::Create(ctx, "match.else", fn)
-                : (i == cases.size() - 1 ? endBB : BasicBlock::Create(ctx, "match.next", fn));
+                : (i == cases.size() - 1 ? defaultBB : BasicBlock::Create(ctx, "match.next", fn));
 
             if (!currentBB) {
                 auto* checkBB = BasicBlock::Create(ctx, "match.check", fn);
@@ -920,7 +1131,28 @@ void IRGen::genMatch(ASTNode* node) {
                 auto* casted = builder.CreateBitCast(payload_ptr, PointerType::getUnqual(vi.payload_type));
                 auto* payload = builder.CreateLoad(vi.payload_type, casted, "payload");
 
-                if (cases[i]->left->right && cases[i]->left->right->children &&
+                // Struct variant: Shape.Circle { radius }  → bindings in cases[i]->middle
+                if (cases[i]->middle && cases[i]->middle->children &&
+                    vi.payload_type->isStructTy()) {
+                    auto* pst = cast<StructType>(vi.payload_type);
+                    unsigned fidx = 0;
+                    for (auto* field : *cases[i]->middle->children) {
+                        if (field->node_type == ASTNodeType::Identifier && field->token) {
+                            auto& fname = field->token->value;
+                            if (fidx < pst->getNumElements()) {
+                                Type* fty = pst->getElementType(fidx);
+                                auto* fgep = builder.CreateStructGEP(pst, casted, fidx);
+                                auto* fval = builder.CreateLoad(fty, fgep, fname);
+                                auto* falloc = builder.CreateAlloca(fty, nullptr, fname);
+                                builder.CreateStore(fval, falloc);
+                                named_values[fname] = falloc;
+                                named_types[fname] = fty;
+                                fidx++;
+                            }
+                        }
+                    }
+                // Simple payload binding: Shape.Circle(radius)  → in cases[i]->left->right
+                } else if (cases[i]->left->right && cases[i]->left->right->children &&
                     !cases[i]->left->right->children->empty()) {
                     auto* arg = (*cases[i]->left->right->children)[0];
                     if (arg->left && arg->left->node_type == ASTNodeType::Identifier && arg->left->token) {
@@ -932,51 +1164,108 @@ void IRGen::genMatch(ASTNode* node) {
                 }
             }
 
-            if (cases[i]->right) genNode(cases[i]->right);
-            if (!has_return && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(endBB);
+            bool case_ret = false;
+            if (cases[i]->right) {
+                bool prev = has_return; has_return = false;
+                genNode(cases[i]->right);
+                case_ret = has_return;
+                has_return = prev;
+            }
+            if (!case_ret && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(endBB);
             currentBB = nextBB;
         }
 
+        // Terminate default block (unreachable)
+        builder.SetInsertPoint(defaultBB);
+        builder.CreateUnreachable();
+
         if (else_case) {
             builder.SetInsertPoint(currentBB);
-            if (else_case->right) genNode(else_case->right);
-            if (!has_return && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(endBB);
+            bool else_ret = false;
+            if (else_case->right) {
+                bool prev = has_return; has_return = false;
+                genNode(else_case->right);
+                else_ret = has_return;
+                has_return = prev;
+            }
+            if (!else_ret && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(endBB);
         }
     } else {
         auto* prevBB = builder.GetInsertBlock();
         auto* checkBB = BasicBlock::Create(ctx, "match.check", fn);
         if (prevBB && !prevBB->getTerminator()) builder.CreateBr(checkBB);
         builder.SetInsertPoint(checkBB);
+        // Default block for unmatched values (exhaustive match should never reach it)
+        auto* defaultBB = BasicBlock::Create(ctx, "match.default", fn);
+        // Track else block in case there's an else_case
+        BasicBlock* elseBB = nullptr;
 
         for (size_t i = 0; i < cases.size(); i++) {
             auto* caseBB = BasicBlock::Create(ctx, "match.case", fn);
-            BasicBlock* nextBB = (i == cases.size() - 1)
-                ? (else_case ? BasicBlock::Create(ctx, "match.else", fn) : endBB)
-                : BasicBlock::Create(ctx, "match.next", fn);
+            BasicBlock* nextBB;
+            if (i == cases.size() - 1) {
+                if (else_case) {
+                    elseBB = BasicBlock::Create(ctx, "match.else", fn);
+                    nextBB = elseBB;
+                } else {
+                    nextBB = defaultBB;
+                }
+            } else {
+                nextBB = BasicBlock::Create(ctx, "match.next", fn);
+            }
 
             auto* pat_val = genExpr(cases[i]->left);
             if (!pat_val) pat_val = ConstantInt::get(Type::getInt32Ty(ctx), 0);
 
+            // Ensure both operands have the same type for ICmp
+            if (match_val->getType() != pat_val->getType()) {
+                if (isIntTy(match_val->getType()) && isIntTy(pat_val->getType())) {
+                    // Widen to the larger type
+                    auto* wider = match_val->getType()->getIntegerBitWidth() >= pat_val->getType()->getIntegerBitWidth()
+                        ? match_val->getType() : pat_val->getType();
+                    if (pat_val->getType() != wider)
+                        pat_val = builder.CreateIntCast(pat_val, wider, false);
+                    else
+                        match_val = builder.CreateIntCast(match_val, wider, false);
+                }
+            }
             auto* cmp = builder.CreateICmpEQ(match_val, pat_val);
             builder.CreateCondBr(cmp, caseBB, nextBB);
 
             builder.SetInsertPoint(caseBB);
-            if (cases[i]->right) genNode(cases[i]->right);
-            if (!has_return && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(endBB);
-
-            if (nextBB != endBB) builder.SetInsertPoint(nextBB);
-        }
-
-        if (else_case) {
-            auto* currBB = builder.GetInsertBlock();
-            if (currBB && !currBB->getTerminator()) {
-                if (else_case->right) genNode(else_case->right);
-                if (!has_return && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(endBB);
+            bool case_ret = false;
+            if (cases[i]->right) {
+                bool prev = has_return; has_return = false;
+                genNode(cases[i]->right);
+                case_ret = has_return;
+                has_return = prev;
             }
+            if (!case_ret && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(endBB);
+
+            if (nextBB != defaultBB) builder.SetInsertPoint(nextBB);
         }
+
+        // Handle else case
+        if (elseBB) {
+            builder.SetInsertPoint(elseBB);
+            bool else_ret = false;
+            if (else_case->right) {
+                bool prev = has_return; has_return = false;
+                genNode(else_case->right);
+                else_ret = has_return;
+                has_return = prev;
+            }
+            if (!else_ret && !builder.GetInsertBlock()->getTerminator()) builder.CreateBr(endBB);
+        }
+
+        // Terminate default block (unreachable)
+        builder.SetInsertPoint(defaultBB);
+        builder.CreateUnreachable();
     }
 
     builder.SetInsertPoint(endBB);
+    if (!endBB->hasNPredecessorsOrMore(1))
+        builder.CreateUnreachable();
 }
 
 // ── Deferred flush ──────────────────────────────────────────────────────────
@@ -1031,6 +1320,11 @@ Value* IRGen::genNode(ASTNode* node) {
 
 Value* IRGen::genExpr(ASTNode* node) {
     if (!node) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    // Struct literal { ... } — must be checked before general BinaryExpression
+    if (node->node_type == ASTNodeType::BinaryExpression &&
+        node->token && node->token->value == "{}") {
+        return genStructLiteral(node);
+    }
     switch (node->node_type) {
         case ASTNodeType::IntegerLiteral:
         case ASTNodeType::FloatLiteral:
@@ -1110,7 +1404,120 @@ Value* IRGen::genIdentifier(ASTNode* node) {
     auto fn = module.getFunction(name);
     if (fn) return fn;
 
+    // Look up global variables
+    auto* gv = module.getNamedGlobal(name);
+    if (gv) {
+        return builder.CreateLoad(gv->getValueType(), gv, name.c_str());
+    }
+
     return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+}
+
+// ── Struct literal ───────────────────────────────────────────────────────────
+
+Value* IRGen::genStructLiteral(ASTNode* node) {
+    if (!node || !node->left) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+
+    std::string struct_name;
+    std::string variant_name;
+    ASTNode* left = node->left;
+
+    if (left->node_type == ASTNodeType::Identifier && left->token) {
+        struct_name = left->token->value;
+    } else if (left->node_type == ASTNodeType::MemberAccess && left->left && left->right) {
+        if (left->left->token) struct_name = left->left->token->value;
+        if (left->right->token) variant_name = left->right->token->value;
+    }
+
+    if (struct_name.empty()) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+
+    // Union variant struct literal: Shape.Circle { radius = 5.0 }
+    auto uit = unions.find(struct_name);
+    if (uit != unions.end()) {
+        UnionVariant* vi = nullptr;
+        for (auto& v : uit->second.variants) {
+            if (v.name == variant_name) { vi = &v; break; }
+        }
+        if (!vi) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+
+        auto* union_ty = uit->second.ll_type;
+        auto* alloc = builder.CreateAlloca(union_ty);
+        auto* tag_ptr = builder.CreateStructGEP(union_ty, alloc, 0, "tag.ptr");
+        builder.CreateStore(ConstantInt::get(Type::getInt32Ty(ctx), vi->tag), tag_ptr);
+
+        if (vi->payload_type && !vi->payload_type->isVoidTy() &&
+            node->right && node->right->node_type == ASTNodeType::Block && node->right->children) {
+
+            auto* payload_ptr = builder.CreateStructGEP(union_ty, alloc, 1, "payload.ptr");
+            auto* casted = builder.CreateBitCast(payload_ptr, PointerType::getUnqual(vi->payload_type));
+
+            if (vi->payload_type->isStructTy() && vi->payload_type->getNumContainedTypes() > 0) {
+                auto* payload_st = cast<StructType>(vi->payload_type);
+                unsigned fidx = 0;
+                for (auto* child : *node->right->children) {
+                    if (child->node_type == ASTNodeType::Assignment && child->right) {
+                        auto* val = genExpr(child->right);
+                        if (val && fidx < payload_st->getNumElements()) {
+                            auto* gep = builder.CreateStructGEP(payload_st, casted, fidx);
+                            Type* expected = payload_st->getElementType(fidx);
+                            if (val->getType() != expected && isIntTy(val->getType()) && isIntTy(expected))
+                                val = widenInt(val, expected, false);
+                            builder.CreateStore(val, gep);
+                            fidx++;
+                        }
+                    }
+                }
+            } else if (!vi->payload_type->isStructTy()) {
+                for (auto* child : *node->right->children) {
+                    if (child->node_type == ASTNodeType::Assignment && child->right) {
+                        auto* val = genExpr(child->right);
+                        if (val) {
+                            if (val->getType() != vi->payload_type && isIntTy(val->getType()) && isIntTy(vi->payload_type))
+                                val = widenInt(val, vi->payload_type, false);
+                            builder.CreateStore(val, casted);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        return builder.CreateLoad(union_ty, alloc, "union.val");
+    }
+
+    // Regular struct literal
+    auto sit = types.structs.find(struct_name);
+    if (sit == types.structs.end()) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+
+    auto* struct_ty = sit->second;
+    auto* alloc = builder.CreateAlloca(struct_ty);
+
+    auto fnit = types.field_names.find(struct_name);
+    std::vector<std::string> field_names;
+    if (fnit != types.field_names.end()) field_names = fnit->second;
+
+    if (node->right && node->right->node_type == ASTNodeType::Block && node->right->children) {
+        for (auto* child : *node->right->children) {
+            if (child->node_type == ASTNodeType::Assignment && child->left && child->left->token) {
+                auto& fname = child->left->token->value;
+                unsigned fidx = 0;
+                for (unsigned i = 0; i < field_names.size(); i++) {
+                    if (field_names[i] == fname) { fidx = i; break; }
+                }
+                if (child->right) {
+                    auto* val = genExpr(child->right);
+                    if (val) {
+                        auto* gep = builder.CreateStructGEP(struct_ty, alloc, fidx);
+                        Type* expected = struct_ty->getElementType(fidx);
+                        if (val->getType() != expected && isIntTy(val->getType()) && isIntTy(expected))
+                            val = widenInt(val, expected, false);
+                        builder.CreateStore(val, gep);
+                    }
+                }
+            }
+        }
+    }
+
+    return builder.CreateLoad(struct_ty, alloc);
 }
 
 // ── Binary operations ───────────────────────────────────────────────────────
@@ -1184,15 +1591,32 @@ Value* IRGen::genBinary(ASTNode* node) {
             auto w1 = cast<IntegerType>(ty)->getBitWidth();
             auto w2 = cast<IntegerType>(rhs->getType())->getBitWidth();
             if (w1 < w2) {
-                // Widen left — use unsigned if left is unsigned
                 lhs = widenInt(lhs, rhs->getType(), lhs_unsigned);
             } else if (w1 > w2) {
-                // Widen right — use unsigned if right is unsigned
                 rhs = widenInt(rhs, ty, rhs_unsigned);
             }
             ty = lhs->getType();
+        } else if (ty->isDoubleTy() || ty->isFloatTy()) {
+            if (isIntTy(rhs->getType()))
+                rhs = widenIntToFloat(rhs, ty);
+        } else if (rhs->getType()->isDoubleTy() || rhs->getType()->isFloatTy()) {
+            if (isIntTy(ty))
+                lhs = widenIntToFloat(lhs, rhs->getType());
+            ty = lhs->getType();
         }
     }
+    // Final type sync: both must match for any op
+    if (lhs->getType() != rhs->getType()) {
+        if (lhs->getType()->isDoubleTy() && rhs->getType()->isFloatTy())
+            rhs = builder.CreateFPExt(rhs, lhs->getType());
+        else if (lhs->getType()->isFloatTy() && rhs->getType()->isDoubleTy())
+            lhs = builder.CreateFPExt(lhs, rhs->getType());
+        else if (isIntTy(lhs->getType()) && isIntTy(rhs->getType()))
+            ; // already handled above
+        else
+            return lhs; // types incompatible, bail out
+    }
+    ty = lhs->getType();
 
     auto isFl = [](Type* t) { return t->isHalfTy() || t->isFloatTy() || t->isDoubleTy() || t->isFP128Ty(); };
     bool fl = isFl(ty);
@@ -1281,6 +1705,41 @@ Value* IRGen::genCall(ASTNode* node) {
     if (!node || !node->token) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
     auto& name = node->token->value;
 
+    // ── Builtin: SizeOf ──────────────────────────────────────────────────
+    if (name == "SizeOf" || name == "@SizeOf") {
+        auto getSizeType = [&](const std::string& tn) -> Type* {
+            if (tn == "void" || tn == "noret")  return Type::getVoidTy(ctx);
+            if (tn == "bool")                   return Type::getInt1Ty(ctx);
+            if (tn == "char")                   return Type::getInt8Ty(ctx);
+            if (tn == "i8" || tn == "u8")       return Type::getInt8Ty(ctx);
+            if (tn == "i16" || tn == "u16")     return Type::getInt16Ty(ctx);
+            if (tn == "i32" || tn == "u32" || tn == "int" || tn == "uint")
+                                                return Type::getInt32Ty(ctx);
+            if (tn == "i64" || tn == "u64" || tn == "isize" || tn == "usize")
+                                                return Type::getInt64Ty(ctx);
+            if (tn == "f32" || tn == "float")   return Type::getFloatTy(ctx);
+            if (tn == "f64" || tn == "double")  return Type::getDoubleTy(ctx);
+            auto sit = types.structs.find(tn);
+            if (sit != types.structs.end())     return sit->second;
+            auto ait = types.aliases.find(tn);
+            if (ait != types.aliases.end())     return ait->second;
+            return nullptr;
+        };
+        if (node->children && !node->children->empty()) {
+            auto* first_arg = (*node->children)[0];
+            if (first_arg->left &&
+                first_arg->left->node_type == ASTNodeType::Identifier &&
+                first_arg->left->token) {
+                Type* ty = getSizeType(first_arg->left->token->value);
+                if (ty) {
+                    uint64_t sz = module.getDataLayout().getTypeAllocSize(ty);
+                    return ConstantInt::get(Type::getInt32Ty(ctx), (uint32_t)sz);
+                }
+            }
+        }
+        return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    }
+
     std::vector<Value*> args;
     if (node->children) {
         for (auto* arg : *node->children) {
@@ -1314,7 +1773,16 @@ Value* IRGen::genCall(ASTNode* node) {
                     }
                     call_args.push_back(widenInt(args[i], expected, is_unsigned));
                 } else {
-                    call_args.push_back(args[i]);
+                    // Types don't match — insert a safe cast to avoid invalid IR
+                    auto* arg_ty = args[i]->getType();
+                    if (arg_ty->isPointerTy() && expected->isIntegerTy())
+                        call_args.push_back(builder.CreatePtrToInt(args[i], expected));
+                    else if (arg_ty->isIntegerTy() && expected->isPointerTy())
+                        call_args.push_back(builder.CreateIntToPtr(args[i], expected));
+                    else if (arg_ty->isPointerTy() && expected->isPointerTy())
+                        call_args.push_back(builder.CreateBitCast(args[i], expected));
+                    else
+                        call_args.push_back(builder.CreateBitCast(args[i], expected));
                 }
             } else {
                 call_args.push_back(args[i]);
@@ -1329,6 +1797,155 @@ Value* IRGen::genCall(ASTNode* node) {
         : builder.CreateCall(fn, call_args, "call");
     if (ret->getType()->isVoidTy()) return Constant::getNullValue(Type::getInt32Ty(ctx));
     return ret;
+}
+
+// ── Format call (fmt.print / fmt.println) ──────────────────────────────────
+
+Value* IRGen::genFormatCall(ASTNode* node, bool add_newline) {
+    auto* call_node = node->right;
+    if (!call_node || !call_node->children || call_node->children->empty())
+        return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+
+    auto* fmt_child = (*call_node->children)[0];
+    if (!fmt_child) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    auto* fmt_node = fmt_child->left;
+    if (!fmt_node) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+
+    auto zero = ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    auto* i8ptr = PointerType::getUnqual(ctx);
+
+    auto makeGlobalStr = [&](const std::string& s) -> Value* {
+        auto* arr = ConstantDataArray::getString(ctx, s, true);
+        auto* gv = new GlobalVariable(module, arr->getType(), true,
+            GlobalValue::PrivateLinkage, arr, ".fmt");
+        return builder.CreateGEP(gv->getValueType(), gv, {zero, zero}, "fmt.ptr");
+    };
+
+    // Helper to get runtime function
+    auto getFn = [&](const char* name) -> Function* {
+        return module.getFunction(name);
+    };
+
+    // Simple case: println/print(str) with no format args
+    if (call_node->children->size() < 2 || !(*call_node->children)[1]->left) {
+        if (add_newline) {
+            auto* fn = getFn("__razen_print_str_newline");
+            if (fn) {
+                auto* str_val = genExpr(fmt_node);
+                if (str_val) builder.CreateCall(fn, {str_val});
+            }
+        } else {
+            auto* fn = getFn("__razen_print_str");
+            if (fn) {
+                auto* str_val = genExpr(fmt_node);
+                if (str_val) builder.CreateCall(fn, {str_val});
+            }
+        }
+        return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    }
+
+    // With format args: parse format string and tuple of args
+    std::string fmt_str = fmt_node->token ? fmt_node->token->value : "";
+
+    auto* tuple_node = (*call_node->children)[1]->left;
+    std::vector<Value*> args;
+    std::vector<ASTNode*> arg_nodes;  // parallel: original AST node for each arg
+    if (tuple_node && tuple_node->node_type == ASTNodeType::TupleLiteral && tuple_node->children) {
+        for (auto* elem : *tuple_node->children) {
+            if (elem) {
+                auto* v = genExpr(elem);
+                if (v) {
+                    args.push_back(v);
+                    arg_nodes.push_back(elem);
+                }
+            }
+        }
+    }
+
+    auto* print_str_fn = getFn("__razen_print_str");
+    auto* print_int_fn = getFn("__razen_print_int");
+    auto* print_int64_fn = getFn("__razen_print_int64");
+    auto* print_double_fn = getFn("__razen_print_double");
+    auto* print_float_fn = getFn("__razen_print_float");
+    auto* print_bool_fn = getFn("__razen_print_bool");
+    auto* print_char_fn = getFn("__razen_print_char");
+    auto* print_ptr_fn = getFn("__razen_print_ptr");
+    auto* print_newline_fn = getFn("__razen_print_newline");
+
+    size_t arg_idx = 0;
+    size_t pos = 0;
+    while (pos < fmt_str.size()) {
+        size_t next = fmt_str.find("{}", pos);
+        if (next == std::string::npos) {
+            auto seg = fmt_str.substr(pos);
+            if (!seg.empty() && print_str_fn) {
+                auto* seg_ptr = makeGlobalStr(seg);
+                builder.CreateCall(print_str_fn, {seg_ptr});
+            }
+            break;
+        }
+
+        if (next > pos && print_str_fn) {
+            auto seg = fmt_str.substr(pos, next - pos);
+            auto* seg_ptr = makeGlobalStr(seg);
+            builder.CreateCall(print_str_fn, {seg_ptr});
+        }
+
+        if (arg_idx < args.size()) {
+            auto* arg = args[arg_idx];
+            auto* ty = arg->getType();
+            if (ty->isPointerTy() && print_str_fn) {
+                builder.CreateCall(print_str_fn, {arg});
+            } else if (ty->isIntegerTy(1) && print_bool_fn) {
+                builder.CreateCall(print_bool_fn, {arg});
+            } else if (ty->isIntegerTy(8)) {
+                // Check if this i8 came from a char variable vs u8
+                bool is_char = false;
+                if (arg_idx < arg_nodes.size() && arg_nodes[arg_idx] &&
+                    arg_nodes[arg_idx]->node_type == ASTNodeType::Identifier &&
+                    arg_nodes[arg_idx]->token) {
+                    is_char = char_vars.count(arg_nodes[arg_idx]->token->value);
+                }
+                if (is_char && print_char_fn) {
+                    builder.CreateCall(print_char_fn, {arg});
+                } else if (print_int_fn) {
+                    arg = builder.CreateIntCast(arg, Type::getInt32Ty(ctx), false);
+                    builder.CreateCall(print_int_fn, {arg});
+                }
+            } else if (ty->isIntegerTy()) {
+                auto bw = ty->getIntegerBitWidth();
+                if (bw <= 32 && print_int_fn) {
+                    if (bw < 32) arg = builder.CreateIntCast(arg, Type::getInt32Ty(ctx), false);
+                    builder.CreateCall(print_int_fn, {arg});
+                } else if (print_int64_fn) {
+                    if (bw < 64) arg = builder.CreateIntCast(arg, Type::getInt64Ty(ctx), false);
+                    builder.CreateCall(print_int64_fn, {arg});
+                }
+            } else if (ty->isDoubleTy() && print_double_fn) {
+                builder.CreateCall(print_double_fn, {arg});
+            } else if (ty->isFloatTy() && print_float_fn) {
+                builder.CreateCall(print_float_fn, {arg});
+            } else if (print_ptr_fn) {
+                if (ty->isPointerTy()) {
+                    builder.CreateCall(print_ptr_fn, {arg});
+                } else {
+                    auto* casted = builder.CreateBitCast(arg, i8ptr);
+                    builder.CreateCall(print_ptr_fn, {casted});
+                }
+            }
+            arg_idx++;
+        } else if (print_str_fn) {
+            auto* brace_ptr = makeGlobalStr("{}");
+            builder.CreateCall(print_str_fn, {brace_ptr});
+        }
+
+        pos = next + 2;
+    }
+
+    if (add_newline && print_newline_fn)
+        builder.CreateCall(print_newline_fn);
+
+    return ConstantInt::get(Type::getInt32Ty(ctx), 0);
 }
 
 // ── Member access ───────────────────────────────────────────────────────────
@@ -1370,6 +1987,14 @@ Value* IRGen::genMemberAccess(ASTNode* node) {
                     (st_ty->isPointerTy() && current_struct == sn)) {
                     sname = sn;
                     break;
+                }
+            }
+            if (sname.empty()) {
+                // fallback: match by struct type name
+                if (st_ty->isStructTy()) {
+                    auto* sty = cast<StructType>(st_ty);
+                    if (sty->hasName() && types.structs.count(sty->getName().str()))
+                        sname = sty->getName().str();
                 }
             }
             if (sname.empty()) {
@@ -1427,6 +2052,11 @@ Value* IRGen::genMemberAccess(ASTNode* node) {
                     break;
                 }
             }
+            if (sname.empty() && st_ty->isStructTy()) {
+                auto* sty = cast<StructType>(st_ty);
+                if (sty->hasName() && types.structs.count(sty->getName().str()))
+                    sname = sty->getName().str();
+            }
             if (sname.empty() && is_ptr && !current_struct.empty()) {
                 sname = current_struct;
             }
@@ -1452,6 +2082,8 @@ Value* IRGen::genMemberAccess(ASTNode* node) {
                 auto* alloc = builder.CreateAlloca(base_ty);
                 builder.CreateStore(loaded, alloc);
                 ptr = alloc;
+            } else {
+                ptr = builder.CreateLoad(st_ty, ptr);
             }
 
             auto* gep = builder.CreateStructGEP(base_ty, ptr, fidx, "field");
@@ -1471,6 +2103,12 @@ union_path:
     // Module function call: fmt.print(...) / fmt.println(...)
     if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token &&
         node->right && node->right->node_type == ASTNodeType::FunctionCall) {
+        auto& mod_name = node->left->token->value;
+        if (mod_name == "fmt") {
+            auto& fn_name = node->right->token->value;
+            if (fn_name == "print" || fn_name == "println")
+                return genFormatCall(node, fn_name == "println");
+        }
         return genCall(node->right);
     }
 
@@ -1484,16 +2122,17 @@ Value* IRGen::genArrayLiteral(ASTNode* node) {
         return ConstantArray::get(ArrayType::get(Type::getInt32Ty(ctx), 0), {});
 
     Type* elem = Type::getInt32Ty(ctx);
-    if ((*node->children)[0]->left) {
-        auto* first = genExpr((*node->children)[0]->left);
+    auto* first_child = (*node->children)[0];
+    if (first_child) {
+        auto* first = genExpr(first_child);
         if (first) elem = first->getType();
     }
 
     std::vector<Constant*> elems;
     bool all_constant = true;
     for (auto* child : *node->children) {
-        if (child->left) {
-            auto* v = genExpr(child->left);
+        if (child) {
+            auto* v = genExpr(child);
             if (v) {
                 if (auto* cv = dyn_cast<Constant>(v)) {
                     elems.push_back(cv);
@@ -1533,8 +2172,8 @@ Value* IRGen::genTupleLiteral(ASTNode* node) {
     std::vector<Constant*> values;
     bool all_constant = true;
     for (auto* child : *node->children) {
-        if (child->left) {
-            auto* v = genExpr(child->left);
+        if (child) {
+            auto* v = genExpr(child);
             if (v) {
                 types.push_back(v->getType());
                 if (auto* cv = dyn_cast<Constant>(v)) {
@@ -1597,15 +2236,15 @@ Value* IRGen::genTryExpr(ASTNode* node) {
 
     auto* successBB = BasicBlock::Create(ctx, "try.success", fn);
     auto* endBB = BasicBlock::Create(ctx, "try.end", fn);
+    BasicBlock* catchBB = nullptr;
 
     auto* flag = builder.CreateExtractValue(call, 0, "err.flag");
 
     if (node->right && node->right->node_type == ASTNodeType::CatchExpression) {
-        auto* catchBB = BasicBlock::Create(ctx, "try.catch", fn);
+        catchBB = BasicBlock::Create(ctx, "try.catch", fn);
         builder.CreateCondBr(flag, catchBB, successBB);
 
         builder.SetInsertPoint(successBB);
-        builder.CreateExtractValue(call, 1, "ok.val");
         builder.CreateBr(endBB);
 
         builder.SetInsertPoint(catchBB);
@@ -1620,10 +2259,15 @@ Value* IRGen::genTryExpr(ASTNode* node) {
         has_return = true;
 
         builder.SetInsertPoint(successBB);
+        builder.CreateBr(endBB);
     }
 
     builder.SetInsertPoint(endBB);
-    return builder.CreateExtractValue(call, 1, "try.val");
+    auto* phi = builder.CreatePHI(call->getType()->getStructElementType(1), 2, "try.val");
+    phi->addIncoming(builder.CreateExtractValue(call, 1, "ok.val"), successBB);
+    if (catchBB)
+        phi->addIncoming(Constant::getNullValue(phi->getType()), catchBB);
+    return phi;
 }
 
 // ── Union constructor ───────────────────────────────────────────────────────
