@@ -12,19 +12,12 @@ func main() -> void {
 
 ## Compiling
 
-Currently the compiler is built via Makefile:
-
 ```bash
-make          # builds razenc in project root
-./razenc      # compiles built-in sample programs (file input pending)
-```
-
-Planned CMake flow (once build system is migrated):
-
-```bash
-cmake -B build
-cmake --build build
-./build/razenc main.rz
+make                    # builds razenc in project root
+./razenc                # compiles 10 built-in sample programs
+./razenc main.rzn       # compiles main.rzn → output/main.o + output/main.s
+./razenc -v             # verbose phase-by-phase debug output
+./razenc --version      # razenc 0.0.3 (LLVM 20, x86-64)
 ```
 
 ## Basic Concepts

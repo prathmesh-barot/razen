@@ -32,4 +32,12 @@ The Razen standard library (`std`) is minimal. No heavy runtime. Only code you u
 
 ## Status
 
-All modules are designed in `design/std_new.md` but not yet implemented. Implementation is Phase 5.
+`std.fmt` is implemented (`src/std/fmt.rzn`) and injected at compile time when `use std.fmt` is detected. It provides `print()`, `println()`, `printf()`, and `puts()` wrappers around C libc.
+
+All 24 modules are fully designed in `design/std_new.md`. Implementation of the remaining modules is Phase 5.
+
+| Module | Status |
+|--------|--------|
+| `std.core` | ☐ Not started |
+| `std.fmt` | ◐ Partially implemented (print/println/printf/puts) |
+| All others | ☐ Not started |

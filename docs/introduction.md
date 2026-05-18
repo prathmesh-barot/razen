@@ -32,6 +32,4 @@ Engineers who work in C, Zig, Rust, or Go and want:
 
 **Early development. Experimental. Not production-ready.**
 
-The lexer, parser, and semantic analyzer are complete. LLVM codegen is in progress. Syntax and semantics will change.
-
-See [ROADMAP.md](../ROADMAP.md) for current progress and milestones.
+The lexer, parser, and semantic analyzer are complete. LLVM codegen is ~85% complete with object/assembly emission working. The standard library has a minimal `fmt` module. See [ROADMAP.md](../ROADMAP.md) for current progress and milestones.
