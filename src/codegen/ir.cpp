@@ -223,8 +223,10 @@ Type* IRGen::getPointeeType(Value* ptr) {
     if (auto* gv = dyn_cast<GlobalVariable>(ptr))
         return gv->getValueType();
     if (auto* li = dyn_cast<LoadInst>(ptr)) {
-        // If loading from a pointer, try to propagate pointee type
+        // Check if the source has an explicitly tracked pointee type
         auto* src = li->getPointerOperand();
+        auto pit = pointee_types.find(src);
+        if (pit != pointee_types.end()) return pit->second;
         return getPointeeType(src);
     }
     // Fallback

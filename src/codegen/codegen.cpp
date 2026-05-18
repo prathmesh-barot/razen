@@ -550,9 +550,24 @@ void IRGen::genFunc(ASTNode* node) {
                 named_values[pname] = builder.CreateAlloca(arg.getType(), nullptr, pname);
                 named_types[pname] = arg.getType();
                 builder.CreateStore(&arg, named_values[pname]);
+                // Track pointee type: self is pointer to the struct type
+                auto sit = types.structs.find(current_struct);
+                if (sit != types.structs.end())
+                    setPointeeType(named_values[pname], sit->second);
             } else {
                 createEntryBlockAlloca(fn, pname, arg.getType());
                 builder.CreateStore(&arg, named_values[pname]);
+                // Track pointee type for *T parameters
+                if (arg.getType()->isPointerTy() && node->middle && node->middle->children &&
+                    idx < node->middle->children->size()) {
+                    auto* pnode = (*node->middle->children)[idx];
+                    if (pnode->node_type == ASTNodeType::Parameter && pnode->left &&
+                        pnode->left->token && pnode->left->token->type == TokenType::Star &&
+                        pnode->left->left) {
+                        Type* inner = razenType(pnode->left->left);
+                        if (inner) setPointeeType(named_values[pname], inner);
+                    }
+                }
             }
         }
         idx++;
@@ -680,6 +695,12 @@ void IRGen::genVar(ASTNode* node, bool is_const) {
             if (!ty) ty = Type::getInt32Ty(ctx);
             createEntryBlockAlloca(current_llvm_function, name, ty);
             builder.CreateStore(init, named_values[name]);
+            // Propagate pointee type for pointer-typed initializers
+            if (init->getType()->isPointerTy()) {
+                Type* pointee = getPointeeType(init);
+                if (pointee && pointee != init->getType())
+                    setPointeeType(named_values[name], pointee);
+            }
             return;
         }
     }
@@ -1688,7 +1709,10 @@ Value* IRGen::genUnary(ASTNode* node) {
     if (op == "&") {
         if (node->left && node->left->node_type == ASTNodeType::Identifier && node->left->token) {
             auto it = named_values.find(node->left->token->value);
-            if (it != named_values.end()) return it->second;
+            if (it != named_values.end()) {
+                setPointeeType(it->second, named_types[node->left->token->value]);
+                return it->second;
+            }
         }
         return Constant::getNullValue(PointerType::getUnqual(ctx));
     }
