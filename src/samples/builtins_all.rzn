@@ -1,0 +1,59 @@
+// Comprehensive test: all compiler helpers (builtins)
+// Tests: @SizeOf, @AlignOf, @TypeOf, @as, @Dyn, @Generic
+
+use std.fmt
+
+// @Generic with single type param (works with matching types)
+@Generic(T) func identity(x: T) -> T { ret x }
+
+// @Generic with multiple type params
+@Generic(T, E) func make_pair(a: T, b: E) -> .{T, E} { ret .{a, b} }
+
+pub func main() -> void {
+    fmt.println("======= All Builtins Test =======")
+
+    // ── @SizeOf ──
+    fmt.println("\n── @SizeOf ──")
+    fmt.println("  int={} f64={} bool={} char={}", .{
+        @SizeOf(int), @SizeOf(f64), @SizeOf(bool), @SizeOf(char)})
+    fmt.println("  i8={} i16={} i32={} i64={}", .{
+        @SizeOf(i8), @SizeOf(i16), @SizeOf(i32), @SizeOf(i64)})
+
+    // ── @AlignOf ──
+    fmt.println("\n── @AlignOf ──")
+    fmt.println("  i32={} f64={} bool={}", .{
+        @AlignOf(i32), @AlignOf(f64), @AlignOf(bool)})
+
+    // ── @TypeOf (type name as string) ──
+    fmt.println("\n── @TypeOf ──")
+    fmt.println("  type of 42    = {}", .{@TypeOf(42)})
+    fmt.println("  type of 3.14  = {}", .{@TypeOf(3.14)})
+    s := "hello"
+    fmt.println("  type of str   = {}", .{@TypeOf(s)})
+    fmt.println("  type of true  = {}", .{@TypeOf(true)})
+    c := 'Z'
+    fmt.println("  type of char  = {}", .{@TypeOf(c)})
+
+    // ── @as (type casting) ──
+    fmt.println("\n── @as ──")
+    pi := 3.14159
+    fmt.println("  f64 3.14159 -> int  = {}", .{@as(int, pi)})
+    fmt.println("  int 42      -> f64  = {}", .{@as(f64, 42)})
+    fmt.println("  i32 1000    -> i8   = {}", .{@as(i8, 1000)})
+    fmt.println("  int 42      -> f32  = {}", .{@as(f32, 42)})
+
+    // ── @Dyn ──
+    fmt.println("\n── @Dyn ──")
+    d := @Dyn
+    fmt.println("  @Dyn = {}", .{d})
+
+    // ── @Generic (works with matching types) ──
+    fmt.println("\n── @Generic ──")
+    fmt.println("  identity(42)    = {}", .{identity(42)})
+    fmt.println("  identity(99)    = {}", .{identity(99)})
+
+    pair := make_pair("hello", 42)
+    fmt.println("  make_pair done: .{\"hello\", 42}")
+
+    fmt.println("\n======= All Complete =======")
+}

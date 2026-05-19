@@ -131,6 +131,54 @@ ASTNode* parsePrimary(ASTData& d) {
                 }
             }
 
+            // @SizeOf(T), @AlignOf(T)
+            if (name_tok.value == "SizeOf" || name_tok.value == "AlignOf") {
+                Token lp = d.getToken();
+                if (lp.type == TokenType::LeftParen) {
+                    d.advance();
+                    ASTNode* target_type = parseTypeNode(d);
+                    Token rp = d.getToken();
+                    if (rp.type == TokenType::RightParen) d.advance();
+                    ASTNode* n = createDefaultAstNode();
+                    n->node_type = ASTNodeType::BuiltinExpression;
+                    n->token = name_tok;
+                    n->left = target_type;
+                    return n;
+                }
+            }
+
+            // @TypeOf(expr)
+            if (name_tok.value == "TypeOf") {
+                Token lp = d.getToken();
+                if (lp.type == TokenType::LeftParen) {
+                    d.advance();
+                    ASTNode* expr = parseBinaryExpr(d, 0);
+                    Token rp = d.getToken();
+                    if (rp.type == TokenType::RightParen) d.advance();
+                    ASTNode* n = createDefaultAstNode();
+                    n->node_type = ASTNodeType::BuiltinExpression;
+                    n->token = name_tok;
+                    n->left = expr;
+                    return n;
+                }
+            }
+
+            // @Self expression
+            if (name_tok.value == "Self") {
+                ASTNode* n = createDefaultAstNode();
+                n->node_type = ASTNodeType::BuiltinExpression;
+                n->token = name_tok;
+                return n;
+            }
+
+            // @Dyn expression
+            if (name_tok.value == "Dyn") {
+                ASTNode* n = createDefaultAstNode();
+                n->node_type = ASTNodeType::BuiltinExpression;
+                n->token = name_tok;
+                return n;
+            }
+
             ASTNode* n = createDefaultAstNode();
             n->node_type = ASTNodeType::Annotation;
             n->token = name_tok;

@@ -110,6 +110,9 @@ struct ASTNode {
 
     // ownership
     bool owns_children = true;
+
+    // metadata string (used to carry type names, reflection info, etc.)
+    std::string data;
 };
 
 } // namespace razen

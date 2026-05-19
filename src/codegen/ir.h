@@ -158,6 +158,7 @@ struct IRGen {
     llvm::Value* genUnary(ASTNode* node);
     llvm::Value* genCall(ASTNode* node);
     llvm::Value* genMemberAccess(ASTNode* node);
+    llvm::Value* genBuiltinExpr(ASTNode* node);
     llvm::Value* genFormatCall(ASTNode* node, bool add_newline);
     llvm::Value* genArrayLiteral(ASTNode* node);
     llvm::Value* genTupleLiteral(ASTNode* node);

@@ -1361,6 +1361,7 @@ Value* IRGen::genExpr(ASTNode* node) {
         case ASTNodeType::ArrayLiteral:     return genArrayLiteral(node);
         case ASTNodeType::TupleLiteral:     return genTupleLiteral(node);
         case ASTNodeType::RangeExpression:  return genRangeLiteral(node);
+        case ASTNodeType::BuiltinExpression: return genBuiltinExpr(node);
         default:                            return ConstantInt::get(Type::getInt32Ty(ctx), 0);
     }
 }
@@ -2332,6 +2333,111 @@ Value* IRGen::genUnionConstruct(ASTNode* node) {
     }
 
     return builder.CreateLoad(union_ty, alloc, "union.val");
+}
+
+// ── Builtin expression (SizeOf, AlignOf, TypeOf, as) ──────────────────────
+
+Value* IRGen::genBuiltinExpr(ASTNode* node) {
+    if (!node || !node->token) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+    auto& name = node->token->value;
+
+    if (name == "SizeOf") {
+        Type* ty = node->left ? razenType(node->left) : nullptr;
+        if (ty) {
+            uint64_t sz = module.getDataLayout().getTypeAllocSize(ty);
+            return ConstantInt::get(Type::getInt64Ty(ctx), sz);
+        }
+        return ConstantInt::get(Type::getInt64Ty(ctx), 0);
+    }
+
+    if (name == "AlignOf") {
+        Type* ty = node->left ? razenType(node->left) : nullptr;
+        if (ty) {
+            uint64_t align = module.getDataLayout().getABITypeAlign(ty).value();
+            return ConstantInt::get(Type::getInt64Ty(ctx), align);
+        }
+        return ConstantInt::get(Type::getInt64Ty(ctx), 0);
+    }
+
+    if (name == "TypeOf") {
+        // @TypeOf(expr) — return type name of expression as a string constant
+        auto* zero = ConstantInt::get(Type::getInt32Ty(ctx), 0);
+        std::string type_name = node->data.empty() ? "unknown" : node->data;
+        auto it = string_globals.find(type_name);
+        GlobalVariable* gv;
+        if (it != string_globals.end()) {
+            gv = it->second;
+        } else {
+            auto* arr = ConstantDataArray::getString(ctx, type_name, true);
+            gv = new GlobalVariable(module, arr->getType(), true,
+                GlobalValue::PrivateLinkage, arr,
+                ".typeof.str." + std::to_string(string_globals.size()));
+            string_globals[type_name] = gv;
+        }
+        return builder.CreateGEP(gv->getValueType(), gv, {zero, zero}, "typeof.str.ptr");
+    }
+
+    if (name == "as") {
+        if (!node->right) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+        auto* val = genExpr(node->right);
+        if (!val) return ConstantInt::get(Type::getInt32Ty(ctx), 0);
+
+        Type* target = node->left ? razenType(node->left) : nullptr;
+        if (!target) return val;
+        if (val->getType() == target) return val;
+
+        Type* src = val->getType();
+
+        // Int -> Int (sign-extend or truncate)
+        if (isIntTy(src) && isIntTy(target)) {
+            auto srcBits = cast<IntegerType>(src)->getBitWidth();
+            auto dstBits = cast<IntegerType>(target)->getBitWidth();
+            if (srcBits < dstBits)
+                return builder.CreateSExt(val, target, "as.sext");
+            else if (srcBits > dstBits)
+                return builder.CreateTrunc(val, target, "as.trunc");
+            return val;
+        }
+
+        // Int -> Float
+        if (isIntTy(src) && isFloatTy(target))
+            return builder.CreateSIToFP(val, target, "as.sitofp");
+
+        // Float -> Int
+        if (isFloatTy(src) && isIntTy(target))
+            return builder.CreateFPToSI(val, target, "as.fptosi");
+
+        // Float -> Float (extend or truncate)
+        if (isFloatTy(src) && isFloatTy(target)) {
+            auto srcW = src->getPrimitiveSizeInBits();
+            auto dstW = target->getPrimitiveSizeInBits();
+            if (srcW < dstW)
+                return builder.CreateFPExt(val, target, "as.fpext");
+            else if (srcW > dstW)
+                return builder.CreateFPTrunc(val, target, "as.fptrunc");
+            return val;
+        }
+
+        // Pointer <-> Int
+        if (src->isPointerTy() && isIntTy(target))
+            return builder.CreatePtrToInt(val, target, "as.ptrtoint");
+        if (isIntTy(src) && target->isPointerTy())
+            return builder.CreateIntToPtr(val, target, "as.inttoptr");
+
+        // Pointer <-> Pointer
+        if (src->isPointerTy() && target->isPointerTy())
+            return builder.CreateBitCast(val, target, "as.bitcast");
+
+        // If no conversion matched, pass through
+        return val;
+    }
+
+    if (name == "Dyn") {
+        // @Dyn — dynamic dispatch marker; just a placeholder for now
+        return ConstantInt::get(Type::getInt1Ty(ctx), 1);
+    }
+
+    return ConstantInt::get(Type::getInt32Ty(ctx), 0);
 }
 
 // ── Optimization pipeline (mem2reg + instcombine) ──────────────────────────

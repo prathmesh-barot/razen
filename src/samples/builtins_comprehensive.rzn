@@ -1,0 +1,34 @@
+// Comprehensive builtins test: SizeOf, AlignOf, TypeOf, as
+
+use std.fmt
+
+struct MyStruct {
+    a: i32,
+    b: f64,
+    c: bool,
+}
+
+pub func main() -> void {
+    fmt.println("=== Builtins Comprehensive Test ===")
+
+    fmt.println("\n-- @SizeOf --")
+    fmt.println("  i32={} f64={} bool={} char={}", .{@SizeOf(i32), @SizeOf(f64), @SizeOf(bool), @SizeOf(char)})
+
+    fmt.println("\n-- @AlignOf --")
+    fmt.println("  i32={} f64={} bool={}", .{@AlignOf(i32), @AlignOf(f64), @AlignOf(bool)})
+
+    fmt.println("\n-- @as type casting --")
+    pi := 3.14159
+    truncated := @as(int, pi)
+    fmt.println("  pi={} as int={}", .{pi, truncated})
+
+    n := @as(f64, 42)
+    fmt.println("  42 as f64={}", .{n})
+
+    fmt.println("\n-- @TypeOf --")
+    _ = @TypeOf(42)
+    _ = @TypeOf(pi)
+    fmt.println("  @TypeOf evaluated")
+
+    fmt.println("\n=== Complete ===")
+}

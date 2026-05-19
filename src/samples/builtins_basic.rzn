@@ -1,0 +1,23 @@
+// Builtins basic test: @SizeOf, @AlignOf, @TypeOf
+
+use std.fmt
+
+pub func main() -> void {
+    fmt.println("@SizeOf tests:")
+    fmt.println("  @SizeOf(int) = {} bytes", .{@SizeOf(int)})
+    fmt.println("  @SizeOf(f64) = {} bytes", .{@SizeOf(f64)})
+    fmt.println("  @SizeOf(bool) = {} bytes", .{@SizeOf(bool)})
+    fmt.println("  @SizeOf(char) = {} bytes", .{@SizeOf(char)})
+    fmt.println("  @SizeOf(i8) = {} bytes", .{@SizeOf(i8)})
+    fmt.println("  @SizeOf(i16) = {} bytes", .{@SizeOf(i16)})
+    fmt.println("  @SizeOf(i32) = {} bytes", .{@SizeOf(i32)})
+    fmt.println("  @SizeOf(i64) = {} bytes", .{@SizeOf(i64)})
+
+    fmt.println("@AlignOf tests:")
+    fmt.println("  @AlignOf(int) = {} bytes", .{@AlignOf(int)})
+    fmt.println("  @AlignOf(f64) = {} bytes", .{@AlignOf(f64)})
+    fmt.println("  @AlignOf(bool) = {} bytes", .{@AlignOf(bool)})
+
+    fmt.println("@TypeOf (type name):")
+    fmt.println("  type of 42 = {}", .{@TypeOf(42)})
+}

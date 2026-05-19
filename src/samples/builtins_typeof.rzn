@@ -1,0 +1,19 @@
+// @TypeOf (type name as string) and @as builtins test
+
+use std.fmt
+
+pub func main() -> void {
+    fmt.println("@as type cast test:")
+    x := 42
+    y := @as(f64, x)
+    fmt.println("  int {} -> f64 {}", .{x, y})
+
+    z := @as(int, 3.14)
+    fmt.println("  f64 3.14 -> int {}", .{z})
+
+    fmt.println("@TypeOf (type name reflection):")
+    fmt.println("  type of 42 = {}", .{@TypeOf(42)})
+    fmt.println("  type of 'hi' = {}", .{@TypeOf("hi")})
+
+    fmt.println("done")
+}

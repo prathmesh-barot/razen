@@ -1909,8 +1909,24 @@ TypeInfo* Analyzer::anaAnnotation(ASTNode* node) {
             return target ? target : allocType(TypeCategory::Any);
         }
         if (name == "TypeOf") {
-            if (node->left) anaNode(node->left);
-            return allocType(TypeCategory::Any);
+            if (node->left) {
+                auto* inner_type = anaNode(node->left);
+                if (inner_type) {
+                    node->data = typeToString(inner_type);
+                } else {
+                    node->data = "void";
+                }
+            }
+            return allocType(TypeCategory::Str);
+        }
+        if (name == "Self") {
+            // @Self returns a pointer to the enclosing type
+            auto* ti = allocType(TypeCategory::Pointer);
+            ti->pointee_type = allocType(TypeCategory::Any);
+            return ti;
+        }
+        if (name == "Dyn") {
+            return allocType(TypeCategory::Bool);
         }
         if (name == "arena" || name == "page" || name == "c" || name == "fixed" ||
             name == "stack" || name == "pool" || name == "debug" || name == "log" ||
