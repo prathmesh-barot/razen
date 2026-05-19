@@ -17,6 +17,7 @@
 #include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 #include <iostream>
+#include <utility>
 
 using namespace llvm;
 
@@ -505,13 +506,31 @@ void IRGen::genExt(ASTNode* node) {
 
 // ── Function codegen ────────────────────────────────────────────────────────
 
-void IRGen::genFunc(ASTNode* node) {
+void IRGen::genFunc(ASTNode* node, const std::string& name_override) {
     if (!node || !node->token) return;
     auto& name = node->token->value;
 
+    // If this is a generic function, store its AST for on-demand specialization
+    bool is_generic = false;
+    std::vector<std::string> generic_param_names;
+    if (name_override.empty() && node->children) {
+        for (auto* child : *node->children) {
+            if (child->node_type == ASTNodeType::GenericParams && child->children) {
+                is_generic = true;
+                for (auto* gp : *child->children) {
+                    if (gp->token) generic_param_names.push_back(gp->token->value);
+                }
+                break;
+            }
+        }
+        if (is_generic && !generic_param_names.empty()) {
+            generic_funcs[name] = {node, generic_param_names};
+        }
+    }
+
     Type* ret = Type::getVoidTy(ctx);
     if (node->left && node->left->node_type == ASTNodeType::ReturnType && node->left->left)
-        ret = resolveType(node->left->left);
+        ret = concreteType(node->left->left);
     current_ret_type = ret;
 
     std::vector<Type*> params;
@@ -519,14 +538,19 @@ void IRGen::genFunc(ASTNode* node) {
     if (node->middle && node->middle->children) {
         for (auto* p : *node->middle->children) {
             if (p->node_type == ASTNodeType::Parameter) {
-                params.push_back(p->left ? resolveType(p->left) : Type::getInt32Ty(ctx));
+                params.push_back(p->left ? concreteType(p->left) : Type::getInt32Ty(ctx));
                 param_names.push_back(p->token ? p->token->value : "arg");
             }
         }
     }
 
     auto* ft = FunctionType::get(ret, params, false);
-    std::string func_name = current_struct.empty() ? name : (current_struct + "." + name);
+    std::string func_name;
+    if (!name_override.empty()) {
+        func_name = name_override;
+    } else {
+        func_name = current_struct.empty() ? name : (current_struct + "." + name);
+    }
     auto* fn = Function::Create(ft, Function::ExternalLinkage, func_name, module);
 
     named_values.clear();
@@ -1775,6 +1799,63 @@ Value* IRGen::genCall(ASTNode* node) {
         }
     }
 
+    // ── Generic function specialization ──
+    auto git = generic_funcs.find(name);
+    if (git != generic_funcs.end()) {
+        std::string mangled = name;
+        for (size_t i = 0; i < git->second.param_names.size() && i < args.size(); i++)
+            mangled += "." + typeToMangle(args[i]->getType());
+        auto* sfn = module.getFunction(mangled);
+        if (!sfn) {
+            auto prev_bb = builder.GetInsertBlock();
+            auto prev_fn = current_llvm_function;
+            auto prev_named = std::move(named_values);
+            auto prev_types = std::move(named_types);
+            auto prev_unsigned = std::move(unsigned_vars);
+            auto prev_char = std::move(char_vars);
+            auto prev_deferred = std::move(deferred);
+            auto prev_func_name = current_func_name;
+            auto prev_ret = current_ret_type;
+            auto prev_has = has_return;
+            auto prev_struct = current_struct;
+            auto prev_bindings = generic_bindings;
+            generic_bindings.clear();
+            for (size_t i = 0; i < git->second.param_names.size() && i < args.size(); i++)
+                generic_bindings[git->second.param_names[i]] = args[i]->getType();
+            genFunc(git->second.node, mangled);
+            generic_bindings = prev_bindings;
+            named_values = std::move(prev_named);
+            named_types = std::move(prev_types);
+            unsigned_vars = std::move(prev_unsigned);
+            char_vars = std::move(prev_char);
+            deferred = std::move(prev_deferred);
+            current_func_name = prev_func_name;
+            current_llvm_function = prev_fn;
+            current_ret_type = prev_ret;
+            has_return = prev_has;
+            current_struct = prev_struct;
+            if (prev_bb) builder.SetInsertPoint(prev_bb);
+            sfn = module.getFunction(mangled);
+        }
+        if (sfn) {
+            std::vector<Value*> call_args;
+            for (size_t i = 0; i < args.size() && i < sfn->arg_size(); i++) {
+                auto* expected = sfn->getArg(i)->getType();
+                if (args[i]->getType() != expected) {
+                    if (isIntTy(args[i]->getType()) && isIntTy(expected))
+                        call_args.push_back(widenInt(args[i], expected, false));
+                    else
+                        call_args.push_back(args[i]);
+                } else {
+                    call_args.push_back(args[i]);
+                }
+            }
+            return sfn->getReturnType()->isVoidTy()
+                ? builder.CreateCall(sfn, call_args)
+                : builder.CreateCall(sfn, call_args, "call");
+        }
+    }
+
     auto* fn = module.getFunction(name);
     if (!fn) {
         errs() << "Error: call to undeclared function '" << name << "'\n";
@@ -2325,6 +2406,20 @@ Value* IRGen::genUnionConstruct(ASTNode* node) {
         if (arg->left) {
             auto* val = genExpr(arg->left);
             if (val) {
+                if (val->getType() != vi->payload_type) {
+                    if (isIntTy(val->getType()) && isIntTy(vi->payload_type))
+                        val = widenInt(val, vi->payload_type, false);
+                    else if (isIntTy(val->getType()) && isFloatTy(vi->payload_type))
+                        val = builder.CreateSIToFP(val, vi->payload_type, "union.sitofp");
+                    else if (isFloatTy(val->getType()) && isIntTy(vi->payload_type))
+                        val = builder.CreateFPToSI(val, vi->payload_type, "union.fptosi");
+                    else if (isFloatTy(val->getType()) && isFloatTy(vi->payload_type))
+                        val = builder.CreateFPExt(val, vi->payload_type, "union.fpext");
+                    else if (val->getType()->isPointerTy() && isIntTy(vi->payload_type))
+                        val = builder.CreatePtrToInt(val, vi->payload_type, "union.ptrtoint");
+                    else if (isIntTy(val->getType()) && vi->payload_type->isPointerTy())
+                        val = builder.CreateIntToPtr(val, vi->payload_type, "union.inttoptr");
+                }
                 auto* payload_ptr = builder.CreateStructGEP(union_ty, alloc, 1, "payload.ptr");
                 auto* casted = builder.CreateBitCast(payload_ptr, PointerType::getUnqual(vi->payload_type));
                 builder.CreateStore(val, casted);

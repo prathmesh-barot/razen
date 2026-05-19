@@ -98,6 +98,14 @@ struct IRGen {
     // ── String literal dedup ──
     std::unordered_map<std::string, llvm::GlobalVariable*> string_globals;
 
+    // ── Generic function specialization ──
+    struct GenericFuncInfo {
+        ASTNode* node;
+        std::vector<std::string> param_names;
+    };
+    std::unordered_map<std::string, GenericFuncInfo> generic_funcs;
+    std::unordered_map<std::string, llvm::Type*> generic_bindings;
+
     // ── Pointee type tracking for dereference ──
     // Maps pointer SSA values -> their pointee type (opaque ptr workaround)
     std::unordered_map<const llvm::Value*, llvm::Type*> pointee_types;
@@ -138,7 +146,9 @@ struct IRGen {
     llvm::Value* genNode(ASTNode* node);
     llvm::Value* genExpr(ASTNode* node);
     void genTopLevel(ASTNode* node);
-    void genFunc(ASTNode* node);
+    void genFunc(ASTNode* node, const std::string& name_override = "");
+    llvm::Type* concreteType(ASTNode* node);
+    llvm::Type* concreteType(const TypeInfo* ti);
     void genVar(ASTNode* node, bool is_const);
     void genBlock(ASTNode* node);
     void genReturn(ASTNode* node);
@@ -184,6 +194,7 @@ struct IRGen {
     llvm::Value* widenInt(llvm::Value* val, llvm::Type* target, bool is_unsigned);
     llvm::Value* widenIntToFloat(llvm::Value* val, llvm::Type* target);
 
+    static std::string typeToMangle(llvm::Type* ty);
     std::string dumpIR() { return dumpModule(module); }
     static std::string dumpModule(llvm::Module& m);
 };

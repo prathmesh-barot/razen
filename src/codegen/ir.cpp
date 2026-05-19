@@ -48,6 +48,17 @@ Type* IRGen::razenType(ASTNode* node) {
         return PointerType::getUnqual(ctx);
     }
 
+    if (node->node_type == ASTNodeType::TupleLiteral) {
+        std::vector<Type*> elems;
+        if (node->children) {
+            for (auto* child : *node->children) {
+                elems.push_back(razenType(child));
+            }
+        }
+        if (elems.empty()) elems.push_back(Type::getInt32Ty(ctx));
+        return StructType::get(ctx, elems);
+    }
+
     if (node->node_type != ASTNodeType::VarType) return Type::getVoidTy(ctx);
     auto tok = node->token;
     if (!tok) return Type::getVoidTy(ctx);
@@ -95,6 +106,8 @@ Type* IRGen::razenType(ASTNode* node) {
         if (ait != types.aliases.end()) return ait->second;
         auto eit = enums.find(name);
         if (eit != enums.end()) return eit->second.backing;
+        auto bit = generic_bindings.find(name);
+        if (bit != generic_bindings.end()) return bit->second;
         return Type::getInt32Ty(ctx);
     }
 
@@ -263,6 +276,40 @@ std::string IRGen::dumpModule(Module& m) {
     m.print(os, nullptr);
     os.flush();
     return str;
+}
+
+std::string IRGen::typeToMangle(llvm::Type* ty) {
+    if (!ty) return "void";
+    if (ty->isIntegerTy()) return "i" + std::to_string(ty->getIntegerBitWidth());
+    if (ty->isFloatTy()) return "f32";
+    if (ty->isDoubleTy()) return "f64";
+    if (ty->isHalfTy()) return "f16";
+    if (ty->isFP128Ty()) return "f128";
+    if (ty->isPointerTy()) return "str";
+    if (ty->isVoidTy()) return "void";
+    if (auto* st = llvm::dyn_cast<llvm::StructType>(ty)) {
+        std::string sn = st->getName().str();
+        if (!sn.empty()) return sn;
+    }
+    if (auto* at = llvm::dyn_cast<llvm::ArrayType>(ty))
+        return "arr" + std::to_string(at->getNumElements());
+    return "unk";
+}
+
+Type* IRGen::concreteType(ASTNode* node) {
+    if (!node) return Type::getVoidTy(ctx);
+    if (node->node_type == ASTNodeType::VarType && node->token) {
+        auto bit = generic_bindings.find(node->token->value);
+        if (bit != generic_bindings.end()) return bit->second;
+    }
+    return razenType(node);
+}
+
+Type* IRGen::concreteType(const TypeInfo* ti) {
+    if (!ti) return Type::getVoidTy(ctx);
+    auto bit = generic_bindings.find(ti->name);
+    if (bit != generic_bindings.end()) return bit->second;
+    return razenType(ti);
 }
 
 } // namespace codegen
